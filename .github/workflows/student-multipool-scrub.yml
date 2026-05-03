@@ -1,0 +1,15 @@
+# Pipeline Verification
+
+Added test:
+- qa/standalone/scrub/student-multipool-scrub.sh
+
+Updated workflow:
+- .github/workflows/student-multipool-scrub.yml
+
+Command used:
+cd build
+../qa/run-standalone.sh scrub/student-multipool-scrub.sh
+
+Result:
+ALL 1 TESTS PASSED
+Elapsed: 3:38.72
