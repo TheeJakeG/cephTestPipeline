@@ -1,15 +1,23 @@
-# Pipeline Verification
+name: Student Multi-Pool Scrub Test
 
-Added test:
-- qa/standalone/scrub/student-multipool-scrub.sh
+on:
+  push:
+  pull_request:
 
-Updated workflow:
-- .github/workflows/student-multipool-scrub.yml
+jobs:
+  student-scrub-test:
+    runs-on: self-hosted
 
-Command used:
-cd build
-../qa/run-standalone.sh scrub/student-multipool-scrub.sh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-Result:
-ALL 1 TESTS PASSED
-Elapsed: 3:38.72
+      - name: Verify test file exists
+        run: |
+          test -f qa/standalone/scrub/student-multipool-scrub.sh
+          test -x qa/standalone/scrub/student-multipool-scrub.sh
+
+      - name: Run student scrub standalone test
+        run: |
+          cd build
+          ../qa/run-standalone.sh scrub/student-multipool-scrub.sh
