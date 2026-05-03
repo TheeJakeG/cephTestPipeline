@@ -71,7 +71,19 @@ export class NvmeofGroupFormComponent extends CdForm implements OnInit {
       pool: new UntypedFormControl('rbd', {
         validators: [Validators.required]
       }),
-      unmanaged: new UntypedFormControl(false)
+      unmanaged: new UntypedFormControl(false),
+      enableEncryption: new UntypedFormControl(false),
+      encryptionConfig: new UntypedFormControl(null)
+    });
+
+    this.groupForm.get('enableEncryption')?.valueChanges.subscribe((enabled) => {
+      const encryptionControl = this.groupForm.get('encryptionConfig');
+      if (enabled) {
+        encryptionControl?.setValidators([Validators.required]);
+      } else {
+        encryptionControl?.clearValidators();
+      }
+      encryptionControl?.updateValueAndValidity();
     });
   }
 
@@ -146,7 +158,7 @@ export class NvmeofGroupFormComponent extends CdForm implements OnInit {
     let taskUrl = `service/${URLVerbs.CREATE}`;
     const serviceName = `${formValues.pool}.${formValues.groupName}`;
 
-    const serviceSpec = {
+    const serviceSpec: Record<string, any> = {
       service_type: 'nvmeof',
       service_id: serviceName,
       pool: formValues.pool,
@@ -156,6 +168,10 @@ export class NvmeofGroupFormComponent extends CdForm implements OnInit {
       },
       unmanaged: formValues.unmanaged
     };
+
+    if (formValues.enableEncryption && formValues.encryptionConfig) {
+      serviceSpec['encryption_key'] = formValues.encryptionConfig;
+    }
 
     this.taskWrapperService
       .wrapTaskAroundCall({

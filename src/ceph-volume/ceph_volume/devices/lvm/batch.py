@@ -216,6 +216,14 @@ class Batch(object):
             action='store_true'
         )
         parser.add_argument(
+            '--tpm2-pcrs',
+            dest='tpm2_pcrs',
+            help=('PCRs for systemd-cryptenroll --tpm2-pcrs when using --with-tpm '
+                  '(default binds to Secure Boot policy, see systemd-cryptenroll(1)).'),
+            default='7',
+            type=str,
+        )
+        parser.add_argument(
             '--crush-device-class',
             dest='crush_device_class',
             help='Crush device class to assign this OSD to',
@@ -398,6 +406,7 @@ class Batch(object):
             'bluestore',
             'dmcrypt',
             'with_tpm',
+            'tpm2_pcrs',
             'crush_device_class',
             'no_systemd',
             'dmcrypt_format_opts',
@@ -447,8 +456,8 @@ class Batch(object):
                                                  num_osds,
                                                  fast_type)
         if fast_devices and not fast_allocations:
-            mlogger.info('{} fast devices were passed, but none are available'.format(len(fast_devices)))
-            return []
+            mlogger.error('{} fast devices were passed, but none are available'.format(len(fast_devices)))
+            exit(1)
         if fast_devices and not len(fast_allocations) == num_osds:
             mlogger.error('{} fast allocations != {} num_osds'.format(
                 len(fast_allocations), num_osds))
@@ -459,8 +468,8 @@ class Batch(object):
                                                       num_osds,
                                                       'block_wal')
         if very_fast_devices and not very_fast_allocations:
-            mlogger.info('{} very fast devices were passed, but none are available'.format(len(very_fast_devices)))
-            return []
+            mlogger.error('{} very fast devices were passed, but none are available'.format(len(very_fast_devices)))
+            exit(1)
         if very_fast_devices and not len(very_fast_allocations) == num_osds:
             mlogger.error('{} very fast allocations != {} num_osds'.format(
                 len(very_fast_allocations), num_osds))

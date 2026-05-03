@@ -110,7 +110,7 @@ filling up the file system used by the Monitor. It might also indicate that the
 Monitor database is too large (see ``MON_DISK_BIG`` below).  Another common
 scenario is that Ceph logging subsystem levels have been raised for
 troubleshooting purposes without subsequent return to default levels.  Ongoing
-verbose logging can easily fill up the files system containing ``/var/log``. If
+verbose logging can easily fill up the file system containing ``/var/log``. If
 you trim logs that are currently open, remember to restart or instruct your
 syslog or other daemon to re-open the log file. Another common dynamic is
 that users or processes have written a large amount of data to ``/tmp``
@@ -198,6 +198,23 @@ To disable the grace period entirely (immediate reporting), set the value to 0:
 .. prompt:: bash #
 
    ceph config set mon mon_netsplit_grace_period 0
+
+MON_COLOCATED
+_____________
+
+Two or more Monitors are located on the same node. This health check is 
+raised when multiple Monitors share the same IP address. This check is by 
+default disabled. 
+
+Colocation of Monitors can increase the risk that a host, rack, or network 
+failure prevents the Monitors from forming a Paxos quorum, which may 
+stall cluster operations.
+
+To enable the :confval:`mon_warn_on_colocated_monitors` warning, run the following command:
+
+.. prompt:: bash #
+
+   ceph config set mon mon_warn_on_colocated_monitors true
 
 AUTH_INSECURE_GLOBAL_ID_RECLAIM
 _______________________________
@@ -339,6 +356,39 @@ think you have encountered a bug.
 However, if you believe the error is transient, you may restart your Manager
 daemon(s) or use ``ceph mgr fail`` on the active daemon in order to force
 failover to another daemon.
+
+**Module failed to initialize**
+
+If the ``ceph health detail`` looks something like this, it means that some
+modules took too long to initialize after a Manager failover, and are unable to process
+commands:
+
+.. code-block:: console
+
+   HEALTH_ERR 4 mgr modules have failed
+   [ERR] MGR_MODULE_ERROR: 14 mgr modules have failed
+       Module 'rbd_support' has failed: Module failed to initialize.
+       Module 'status' has failed: Module failed to initialize.
+       Module 'telemetry' has failed: Module failed to initialize.
+       Module 'volumes' has failed: Module failed to initialize.
+
+
+You can also see these modules listed under ``pending_modules``
+in the output of the following command:
+
+.. prompt:: bash $
+
+   ceph tell mgr mgr_status
+
+To troubleshoot, you may run ``ceph mgr fail`` to reboot
+module initialization.
+
+Note that the health error may clear on its own since modules
+will continue to initialize in the background.
+
+If the modules are still failing to initialize, please file a bug
+report under the `"mgr" project <https://tracker.ceph.com/projects/mgr>`_
+for further assistance.
 
 OSDs
 ----
@@ -596,6 +646,21 @@ by running the following command:
 Since migration of Filestore OSDs to BlueStore can take a considerable amount
 of time to complete, we recommend that you begin the process well in advance
 of any update to Reef or to later releases.
+
+OSD_UPGRADE_FINISHED
+____________________
+
+All up OSDs are running a release newer than ``require_osd_release``,
+which means the cluster is ready to advance the gate but the operator
+has not yet done so.
+
+Run the following command to clear the warning:
+
+.. prompt:: bash #
+
+   ceph osd require-osd-release <release>
+
+See :ref:`OSD_UPGRADE_FINISHED` for full details.
 
 OSD_UNREACHABLE
 _______________
@@ -1702,17 +1767,21 @@ until the condition is fixed.
 We encourage you to fix this by removing additional dividing CRUSH buckets or by increasing the
 number of dividing buckets to two. For more information, see :ref:`stretch_mode`.
 
-UNEVEN_WEIGHTS_STRETCH_MODE
-___________________________
+STRETCH_MODE_BUCKET_WEIGHT_IMBALANCE
+____________________________________
 
-The two dividing CRUSH buckets must have equal weights when stretch mode is enabled.
-This warning suggests that the two dividing buckets have uneven weights after
-stretch mode is enabled. This is not immediately fatal, however, you can expect
-Ceph to be confused when trying to process transitions between dividing buckets.
+The two dividing buckets must have weights within a fractional difference 
+when stretch mode is enabled. This is determined by the configuration option
+``mon_stretch_max_bucket_weight_delta`` (default: 0.1).
 
-We encourage you to fix this by making the weights even on both dividing CRUSH buckets.
+This is not immediately fatal, however, you can expect Ceph to experience performance bottlenecks
+and imbalanced PG distribution if the aggregate CRUSH weights of the buckets differ significantly,
+as the smaller bucket will carry a higher I/O load per OSD.
+
+We encourage you to fix this by making the weights of the dividing buckets more even.
 This can be done by making sure the combined weight of the OSDs on each dividing
-bucket are the same. For more information, see :ref:`stretch_mode`.
+bucket are within the fractional difference defined by
+``mon_stretch_max_bucket_weight_delta``.
 
 NONEXISTENT_MON_CRUSH_LOC_STRETCH_MODE
 ______________________________________

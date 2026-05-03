@@ -89,7 +89,6 @@ using ceph::crypto::MD5;
 #define RGW_ATTR_CORS		RGW_ATTR_PREFIX "cors"
 #define RGW_ATTR_ETAG RGW_ATTR_PREFIX "etag"
 #define RGW_ATTR_CKSUM          RGW_ATTR_PREFIX "cksum"
-#define RGW_ATTR_SHA256         RGW_ATTR_PREFIX "x-amz-content-sha256"
 #define RGW_ATTR_BLAKE3         RGW_ATTR_PREFIX "blake3"
 #define RGW_ATTR_BUCKETS	RGW_ATTR_PREFIX "buckets"
 #define RGW_ATTR_META_PREFIX	RGW_ATTR_PREFIX RGW_AMZ_META_PREFIX
@@ -360,6 +359,7 @@ inline constexpr const char* RGW_REST_STS_XMLNS =
 #define ERR_BUSY_RESHARDING      2300 // also in cls_rgw_types.h, don't change!
 #define ERR_NO_SUCH_ENTITY       2301
 #define ERR_LIMIT_EXCEEDED       2302
+#define ERR_CONCURRENT_MODIFICATION 2303
 
 // STS Errors
 #define ERR_PACKED_POLICY_TOO_LARGE 2400
@@ -369,7 +369,8 @@ inline constexpr const char* RGW_REST_STS_XMLNS =
 #define ERR_ACCOUNT_EXISTS 2403
 
 #define ERR_RESTORE_ALREADY_IN_PROGRESS 2500
-    
+#define ERR_EXPIRED_TOKEN 2501
+
 #ifndef UINT32_MAX
 #define UINT32_MAX (0xffffffffu)
 #endif
@@ -1310,6 +1311,7 @@ struct req_state : DoutPrefixProvider {
   std::shared_ptr<RateLimiter> ratelimit_data;
   RGWRateLimitInfo user_ratelimit;
   RGWRateLimitInfo bucket_ratelimit;
+  int64_t ratelimit_retry_after{0};
   std::string ratelimit_bucket_marker;
   std::string ratelimit_user_name;
   bool content_started{false};
@@ -1334,6 +1336,7 @@ struct req_state : DoutPrefixProvider {
 
   std::string bucket_tenant;
   std::string bucket_name;
+  rgw_obj_key object_key; // requested object name and version id
 
   /* bucket is only created in rgw_build_bucket_policies() and should never be
    * overwritten */
@@ -1341,6 +1344,7 @@ struct req_state : DoutPrefixProvider {
   std::unique_ptr<rgw::sal::Object> object;
   std::string src_tenant_name;
   std::string src_bucket_name;
+  rgw_obj_key src_object_key; // requested source object name and version id
   std::unique_ptr<rgw::sal::Object> src_object;
   ACLOwner bucket_owner;
   // Resource owner for the authenticated identity, initialized in authorize()

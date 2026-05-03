@@ -36,7 +36,6 @@ import threading
 from collections import defaultdict
 from contextlib import contextmanager
 from enum import IntEnum, Enum
-import os
 import rados
 import re
 import socket
@@ -409,6 +408,8 @@ def _extract_target_func(
 
 
 class CLICommandBase(object):
+    COMMANDS: Dict[str, 'CLICommandBase'] = {}
+
     def __init__(self,
                  prefix: str,
                  perm: str = 'rw',
@@ -560,6 +561,22 @@ class CLICommandBase(object):
         })
 
 
+class Command(CLICommandBase):
+    """Backward-compatible shim for modules that use Command(prefix, handler=func)"""
+    def __init__(self, prefix: str, perm: str = 'rw', poll: bool = False,
+                 handler: Optional[Callable] = None, **kwargs: Any):
+        super().__init__(prefix, perm, poll)
+        if handler is not None:
+            self._register_handler(handler)
+
+
+# Backward-compatible alias: the mgr daemon binary imports CLICommand by name
+CLICommand = CLICommandBase
+# Backward-compatible aliases for built-in modules that import these names
+CLIReadCommand = CLICommandBase.Read
+CLIWriteCommand = CLICommandBase.Write
+
+
 def CLICheckNonemptyFileInput(desc: str) -> Callable[[HandlerFuncType], HandlerFuncType]:
     def CheckFileInput(func: HandlerFuncType) -> HandlerFuncType:
         @functools.wraps(func)
@@ -679,6 +696,18 @@ class CPlusPlusHandler(logging.Handler):
             self._module._ceph_log(self.format(record))
 
 
+class MgrRootHandler(CPlusPlusHandler):
+    def __init__(self, module_inst: 'MgrModuleLoggingMixin') -> None:
+        super().__init__(module_inst)
+        self.setFormatter(logging.Formatter(
+            "[mgr %(levelname)-4s %(name)s] %(message)s"
+        ))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        record.name = "mgr"
+        super().emit(record)
+
+
 class ClusterLogHandler(logging.Handler):
     def __init__(self, module_inst: Any):
         super().__init__()
@@ -713,6 +742,8 @@ class FileHandler(logging.FileHandler):
 
 
 class MgrModuleLoggingMixin(object):
+    module_name: str
+
     def _configure_logging(self,
                            mgr_level: str,
                            module_level: str,
@@ -721,7 +752,7 @@ class MgrModuleLoggingMixin(object):
                            log_to_cluster: bool) -> None:
         self._mgr_level: Optional[str] = None
         self._module_level: Optional[str] = None
-        self._root_logger = logging.getLogger()
+        self._module_logger = logging.getLogger(self.module_name)
 
         self._unconfigure_logging()
 
@@ -733,24 +764,29 @@ class MgrModuleLoggingMixin(object):
         self.log_to_file = log_to_file
         self.log_to_cluster = log_to_cluster
 
-        self._root_logger.addHandler(self._mgr_log_handler)
-        if log_to_file:
-            self._root_logger.addHandler(self._file_log_handler)
-        if log_to_cluster:
-            self._root_logger.addHandler(self._cluster_log_handler)
+        root = logging.getLogger()
+        if not any(isinstance(h, MgrRootHandler) for h in root.handlers):
+            root.addHandler(MgrRootHandler(self))
+            root.setLevel(logging.NOTSET)
 
-        self._root_logger.setLevel(logging.NOTSET)
+        self._module_logger.addHandler(self._mgr_log_handler)
+        if log_to_file:
+            self._module_logger.addHandler(self._file_log_handler)
+        if log_to_cluster:
+            self._module_logger.addHandler(self._cluster_log_handler)
+
+        self._module_logger.propagate = False
         self._set_log_level(mgr_level, module_level, cluster_level)
 
     def _unconfigure_logging(self) -> None:
         # remove existing handlers:
         rm_handlers = [
-            h for h in self._root_logger.handlers
+            h for h in self._module_logger.handlers
             if (isinstance(h, CPlusPlusHandler)
                 or isinstance(h, FileHandler)
                 or isinstance(h, ClusterLogHandler))]
         for h in rm_handlers:
-            self._root_logger.removeHandler(h)
+            self._module_logger.removeHandler(h)
         self.log_to_file = False
         self.log_to_cluster = False
 
@@ -793,25 +829,25 @@ class MgrModuleLoggingMixin(object):
         # enable file log
         self.getLogger().warning("enabling logging to file")
         self.log_to_file = True
-        self._root_logger.addHandler(self._file_log_handler)
+        self._module_logger.addHandler(self._file_log_handler)
 
     def _disable_file_log(self) -> None:
         # disable file log
         self.getLogger().warning("disabling logging to file")
         self.log_to_file = False
-        self._root_logger.removeHandler(self._file_log_handler)
+        self._module_logger.removeHandler(self._file_log_handler)
 
     def _enable_cluster_log(self) -> None:
         # enable cluster log
         self.getLogger().warning("enabling logging to cluster")
         self.log_to_cluster = True
-        self._root_logger.addHandler(self._cluster_log_handler)
+        self._module_logger.addHandler(self._cluster_log_handler)
 
     def _disable_cluster_log(self) -> None:
         # disable cluster log
         self.getLogger().warning("disabling logging to cluster")
         self.log_to_cluster = False
-        self._root_logger.removeHandler(self._cluster_log_handler)
+        self._module_logger.removeHandler(self._cluster_log_handler)
 
     def _ceph_log_level_to_python(self, log_level: str) -> str:
         if log_level:
@@ -832,7 +868,11 @@ class MgrModuleLoggingMixin(object):
         return log_level
 
     def getLogger(self, name: Optional[str] = None) -> logging.Logger:
-        return logging.getLogger(name)
+        logger = getattr(self, '_module_logger', None) \
+            or logging.getLogger(self.module_name)
+        if name is None:
+            return logger
+        return logger.getChild(name)
 
 
 class MgrStandbyModule(ceph_module.BaseMgrStandbyModule, MgrModuleLoggingMixin):
@@ -1272,16 +1312,16 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
             db.execute('BEGIN;')
             self.create_skeleton_schema(db)
             if kv == 1:
-                os._exit(120)
+                return self._ceph_exit(120, hard=True)
             cur = db.execute(SQL)
             row = cur.fetchone()
             self.maybe_upgrade(db, int(row['value']))
             assert cur.fetchone() is None
             cur.close()
             if kv == 2:
-                os._exit(120)
+                return self._ceph_exit(120, hard=True)
         if kv == 3:
-            os._exit(120)
+            return self._ceph_exit(120, hard=True)
 
     def configure_db(self, db: sqlite3.Connection) -> None:
         db.execute('PRAGMA FOREIGN_KEYS = 1')

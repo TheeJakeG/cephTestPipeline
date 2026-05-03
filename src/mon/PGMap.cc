@@ -53,6 +53,9 @@ MEMPOOL_DEFINE_OBJECT_FACTORY(PGMap::Incremental, pgmap_inc, pgmap);
 // ---------------------
 // PGMapDigest
 
+PGMapDigest::PGMapDigest() noexcept = default;
+PGMapDigest::~PGMapDigest() noexcept = default;
+
 void PGMapDigest::encode(bufferlist& bl, uint64_t features) const
 {
   // NOTE: see PGMap::encode_digest
@@ -1008,6 +1011,13 @@ int64_t PGMapDigest::get_pool_free_space(const OSDMap &osd_map,
 
   return avail / osd_map.pool_raw_used_rate(poolid);
 }
+
+PGMap::PGMap() noexcept
+  : version(0),
+    last_osdmap_epoch(0), last_pg_scan(0)
+{}
+
+PGMap::~PGMap() noexcept = default;
 
 int64_t PGMap::get_rule_avail(const OSDMap& osdmap, int ruleno) const
 {
@@ -3314,14 +3324,16 @@ void PGMap::get_health_checks(
         summary += " experiencing stalled read in block device of BlueStore";
       } else if (asum.first == "WAL_DEVICE_STALLED_READ_ALERT") {
         summary += " experiencing stalled read in wal device of BlueFS";
+      } else if (asum.first == "BLUESTORE_BLUEFS_OVERSIZED") {
+        summary += " have BlueFS usage exceeding configured ratio of main device size";
       } else if (asum.first == "DB_DEVICE_STALLED_READ_ALERT") {
         summary += " experiencing stalled read in db device of BlueFS";
       } else if (asum.first.find("_DISCARD_QUEUE") != std::string::npos) {
-	for (auto str : asum.second.second) {
-	  summary += str;
-	}
+        summary += " experiencing slow discard operations";
       } else if (asum.first == "BLUESTORE_FREE_FRAGMENTATION") {
         summary += " experiencing high free space fragmentation of BlueStore";
+      } else if (asum.first == "EXTBLKDEV") {
+        summary += " reporting problems with ExtBlkDev plugin";
       }
 
       auto& d = checks->add(asum.first, HEALTH_WARN, summary, asum.second.first);

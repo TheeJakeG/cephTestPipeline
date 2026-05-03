@@ -3,7 +3,7 @@
 
 #include "crimson/os/seastore/extent_placement_manager.h"
 
-#include "crimson/common/errorator-loop.h"
+#include "crimson/common/errorator-utils.h"
 #include "crimson/common/config_proxy.h"
 #include "crimson/os/seastore/logging.h"
 
@@ -12,11 +12,13 @@ SET_SUBSYS(seastore_epm);
 namespace crimson::os::seastore {
 
 SegmentedOolWriter::SegmentedOolWriter(
+  store_index_t store_index,
   data_category_t category,
   rewrite_gen_t gen,
   SegmentProvider& sp,
   SegmentSeqAllocator &ssa)
-  : segment_allocator(nullptr, category, gen, sp, ssa),
+  : store_index(store_index),
+    segment_allocator(nullptr, category, gen, sp, ssa),
     record_submitter(crimson::common::get_conf<uint64_t>(
                        "seastore_journal_iodepth_limit"),
                      crimson::common::get_conf<uint64_t>(
@@ -215,7 +217,7 @@ void ExtentPlacementManager::init(
     // DATA
     data_writers_by_gen.resize(num_writers, nullptr);
     for (rewrite_gen_t gen = OOL_GENERATION; gen < hot_tier_generations; ++gen) {
-      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
+      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(store_index,
 	    data_category_t::DATA, gen, *segment_cleaner,
             *ool_segment_seq_allocator));
       data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
@@ -224,7 +226,7 @@ void ExtentPlacementManager::init(
     // METADATA
     md_writers_by_gen.resize(num_writers, {});
     for (rewrite_gen_t gen = OOL_GENERATION; gen < hot_tier_generations; ++gen) {
-      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
+      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(store_index,
 	    data_category_t::METADATA, gen, *segment_cleaner,
             *ool_segment_seq_allocator));
       md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
@@ -256,14 +258,14 @@ void ExtentPlacementManager::init(
   if (cold_segment_cleaner) {
     // Cold DATA Segments
     for (rewrite_gen_t gen = hot_tier_generations; gen <= dynamic_max_rewrite_generation; ++gen) {
-      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
+      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(store_index,
             data_category_t::DATA, gen, *cold_segment_cleaner,
             *ool_segment_seq_allocator));
       data_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
     }
     for (rewrite_gen_t gen = hot_tier_generations; gen <= dynamic_max_rewrite_generation; ++gen) {
       // Cold METADATA Segments
-      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(
+      writer_refs.emplace_back(std::make_unique<SegmentedOolWriter>(store_index,
             data_category_t::METADATA, gen, *cold_segment_cleaner,
             *ool_segment_seq_allocator));
       md_writers_by_gen[generation_to_writer(gen)] = writer_refs.back().get();
@@ -597,14 +599,14 @@ void ExtentPlacementManager::BackgroundProcess::log_state(const char *caller) co
   }
 }
 
-ExtentPlacementManager::mount_ret ExtentPlacementManager::BackgroundProcess::mount() {
+ExtentPlacementManager::mount_ret ExtentPlacementManager::BackgroundProcess::mount(store_index_t store_index) {
   LOG_PREFIX(BackgroundProcess::mount);
   DEBUG("start");
   ceph_assert(state == state_t::STOP);
   state = state_t::MOUNT;
   trimmer->reset();
   stats = {};
-  register_metrics();
+  register_metrics(store_index);
   DEBUG("mounting main cleaner");
   co_await main_cleaner->mount();
   if (has_cold_tier()) {
@@ -690,6 +692,30 @@ ExtentPlacementManager::BackgroundProcess::run_until_halt()
     },
     [this] {
       return do_background_cycle();
+    }
+  ).finally([FNAME] {
+    INFO("finished");
+  });
+}
+
+seastar::future<>
+ExtentPlacementManager::BackgroundProcess::run_cleaner_until_done()
+{
+  LOG_PREFIX(BackgroundProcess::run_cleaner_until_done);
+  ceph_assert(state == state_t::HALT);
+  assert(!is_running());
+  INFO("started...");
+  return seastar::do_until(
+    [this] {
+      return !main_cleaner->should_clean_space();
+    },
+    [this] {
+      return main_cleaner->clean_space(
+      ).handle_error(
+        crimson::ct_error::assert_all{
+          "run_cleaner_until_done encountered error in clean_space"
+        }
+      );
     }
   ).finally([FNAME] {
     INFO("finished");
@@ -1006,26 +1032,34 @@ ExtentPlacementManager::BackgroundProcess::do_background_cycle()
   }
 }
 
-void ExtentPlacementManager::BackgroundProcess::register_metrics()
+void ExtentPlacementManager::BackgroundProcess::register_metrics(store_index_t store_index)
 {
   namespace sm = seastar::metrics;
   metrics.add_group("background_process", {
     sm::make_counter("io_count", stats.io_count,
-                     sm::description("the sum of IOs")),
+                     sm::description("the sum of IOs"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_blocked_count", stats.io_blocked_count,
-                     sm::description("IOs that are blocked by gc")),
+                     sm::description("IOs that are blocked by gc"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_blocked_count_trim", stats.io_blocked_count_trim,
-                     sm::description("IOs that are blocked by trimming")),
+                     sm::description("IOs that are blocked by trimming"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_retried_blocked_count_clean", stats.io_blocked_count_clean,
-                     sm::description("Retried IOs that are blocked by cleaning")),
+                     sm::description("Retried IOs that are blocked by cleaning"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_retried_blocked_count_trim", stats.io_blocked_count_trim,
-                     sm::description("Retried IOs that are blocked by trimming")),
+                     sm::description("Retried IOs that are blocked by trimming"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_blocked_count_clean", stats.io_blocked_count_clean,
-                     sm::description("IOs that are blocked by cleaning")),
+                     sm::description("IOs that are blocked by cleaning"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_blocked_sum", stats.io_blocked_sum,
-                     sm::description("the sum of blocking IOs")),
+                     sm::description("the sum of blocking IOs"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))}),
     sm::make_counter("io_blocked_time", stats.io_blocked_time,
-                     sm::description("the sum of the time(ms) in which IOs are blocked"))
+                     sm::description("the sum of the time(ms) in which IOs are blocked"),
+                     {sm::label_instance("shard_store_index", std::to_string(store_index))})
   });
 }
 

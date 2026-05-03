@@ -123,11 +123,6 @@ constexpr device_id_t DEVICE_ID_SEGMENTED_MIN = 0;
 constexpr device_id_t DEVICE_ID_RANDOM_BLOCK_MIN = 
   1 << (std::numeric_limits<device_id_t>::digits - 1);
 
-// TODO this Signature is only applicable for segment devices(SSD/HDD) not
-// for other two devices like ZBD/RANDOM_BLOCK_SSD
-constexpr const char SEASTORE_SUPERBLOCK_SIGN[] = "seastore block device\n";
-constexpr std::size_t SEASTORE_SUPERBLOCK_SIGN_LEN = sizeof(SEASTORE_SUPERBLOCK_SIGN) - 1;
-
 struct device_id_printer_t {
   device_id_t id;
 };
@@ -1480,8 +1475,9 @@ enum class extent_types_t : uint8_t {
   TEST_BLOCK_PHYSICAL = 14,
   BACKREF_INTERNAL = 15,
   BACKREF_LEAF = 16,
+  LOG_NODE = 17,
   // None and the number of valid extent_types_t
-  NONE = 17,
+  NONE = 18,
 };
 using extent_types_le_t = uint8_t;
 constexpr auto EXTENT_TYPES_MAX = static_cast<uint8_t>(extent_types_t::NONE);
@@ -1496,14 +1492,16 @@ constexpr bool is_data_type(extent_types_t type) {
 }
 
 constexpr bool is_logical_metadata_type(extent_types_t type) {
-  return type >= extent_types_t::ROOT_META &&
-         type <= extent_types_t::COLL_BLOCK;
+  return (type >= extent_types_t::ROOT_META &&
+         type <= extent_types_t::COLL_BLOCK) ||
+	 type == extent_types_t::LOG_NODE;
 }
 
 constexpr bool is_logical_type(extent_types_t type) {
   if ((type >= extent_types_t::ROOT_META &&
        type <= extent_types_t::OBJECT_DATA_BLOCK) ||
-      type == extent_types_t::TEST_BLOCK) {
+      type == extent_types_t::TEST_BLOCK ||
+      type == extent_types_t::LOG_NODE) {
     assert(is_logical_metadata_type(type) ||
            is_data_type(type));
     return true;
@@ -1557,7 +1555,8 @@ constexpr bool is_backref_mapped_type(extent_types_t type) {
   if ((type >= extent_types_t::LADDR_INTERNAL &&
        type <= extent_types_t::OBJECT_DATA_BLOCK) ||
       type == extent_types_t::TEST_BLOCK ||
-      type == extent_types_t::TEST_BLOCK_PHYSICAL) {
+      type == extent_types_t::TEST_BLOCK_PHYSICAL ||
+      type == extent_types_t::LOG_NODE) {
     assert(is_logical_type(type) ||
 	   is_lba_node(type) ||
 	   type == extent_types_t::TEST_BLOCK_PHYSICAL);
@@ -1573,7 +1572,7 @@ constexpr bool is_backref_mapped_type(extent_types_t type) {
 constexpr bool is_real_type(extent_types_t type) {
   if (type <= extent_types_t::OBJECT_DATA_BLOCK ||
       (type >= extent_types_t::TEST_BLOCK &&
-       type <= extent_types_t::BACKREF_LEAF)) {
+       type <= extent_types_t::LOG_NODE)) {
     assert(is_logical_type(type) ||
            is_physical_type(type));
     return true;
@@ -2262,6 +2261,12 @@ constexpr bool is_background_transaction(transaction_type_t type) {
           type < transaction_type_t::MAX);
 }
 
+constexpr bool is_rewrite_transaction(transaction_type_t type) {
+  return type == transaction_type_t::TRIM_DIRTY ||
+    type == transaction_type_t::CLEANER_MAIN ||
+    type == transaction_type_t::CLEANER_COLD;
+}
+
 constexpr bool is_trim_transaction(transaction_type_t type) {
   return (type == transaction_type_t::TRIM_DIRTY ||
       type == transaction_type_t::TRIM_ALLOC);
@@ -2271,6 +2276,34 @@ constexpr bool is_modify_transaction(transaction_type_t type) {
   return (type == transaction_type_t::MUTATE ||
       is_background_transaction(type));
 }
+
+/**
+ * should_use_no_conflict_publish()
+ *
+ * Returns true when this (transaction source, extent type) pair should take
+ * the no-conflict publish path (i.e avoid invalidate-and-retry and use the
+ * committer + visibility hand-off).
+ *
+ * Currently true for:
+ *  - rewrite (background) transactions, for any non-root extent
+ *
+ *  To be expanded to:
+ *  - user (txn_manager) transactions that mutate LBA nodes
+ *  - Onode/Omap nodes
+ */
+constexpr bool should_use_no_conflict_publish(transaction_type_t txn_type,
+                                              extent_types_t ext_type) {
+  // keep classic handling for ROOT
+  if (is_root_type(ext_type)) {
+    return false;
+  }
+
+  // TODO: Extend this as support grows (e.g. Onode/OMAP nodes).
+  //       is_user_transaction(txn_type) && is_lba_node(ext_type)
+
+  return is_rewrite_transaction(txn_type);
+}
+
 
 // Note: It is possible to statically introduce structs for OOL, which must be
 // more efficient, but that requires to specialize the RecordSubmitter as well.

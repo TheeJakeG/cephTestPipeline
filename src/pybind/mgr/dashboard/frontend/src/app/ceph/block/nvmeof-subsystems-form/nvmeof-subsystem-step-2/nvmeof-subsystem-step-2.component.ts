@@ -17,6 +17,7 @@ import { TearsheetStep } from '~/app/shared/models/tearsheet-step';
 })
 export class NvmeofSubsystemsStepTwoComponent implements OnInit, TearsheetStep {
   @Input() group!: string;
+  @Input() existingHosts: string[] = [];
   @ViewChild('rightInfluencer', { static: true })
   rightInfluencer?: TemplateRef<any>;
   formGroup: CdFormGroup;
@@ -37,6 +38,16 @@ export class NvmeofSubsystemsStepTwoComponent implements OnInit, TearsheetStep {
 
   ngOnInit() {
     this.createForm();
+
+    this.formGroup.get('hostType')?.valueChanges.subscribe(() => {
+      this.formGroup.get('hostname')?.updateValueAndValidity();
+    });
+
+    this.formGroup.get('addedHosts')?.valueChanges.subscribe(() => {
+      this.formGroup.get('hostname')?.updateValueAndValidity();
+    });
+
+    this.formGroup.get('hostname')?.updateValueAndValidity();
   }
 
   isValidNQN = CdValidators.custom(
@@ -46,16 +57,18 @@ export class NvmeofSubsystemsStepTwoComponent implements OnInit, TearsheetStep {
 
   isDuplicate = CdValidators.custom(
     'duplicate',
-    (input: string) => !!input && this.formGroup?.get('addedHosts')?.value.includes(input)
+    (input: string) =>
+      !!input &&
+      ((this.formGroup?.get('addedHosts')?.value ?? []).includes(input) ||
+        this.existingHosts.includes(input))
   );
 
-  isRequired = CdValidators.custom(
-    'customRequired',
-    (input: string) =>
-      !input &&
-      this.addedHostsLength === 0 &&
-      this.formGroup?.get('hostType')?.value === this.HOST_TYPE.SPECIFIC
-  );
+  isRequired = CdValidators.custom('customRequired', (input: string) => {
+    const hostType = this.formGroup?.get('hostType')?.value;
+    const addedHosts = this.formGroup?.get('addedHosts')?.value ?? [];
+
+    return !input && addedHosts.length === 0 && hostType === this.HOST_TYPE.SPECIFIC;
+  });
 
   showRightInfluencer(): boolean {
     return this.formGroup.get('hostType')?.value === this.HOST_TYPE.SPECIFIC;
@@ -76,24 +89,25 @@ export class NvmeofSubsystemsStepTwoComponent implements OnInit, TearsheetStep {
     hostnameCtrl.markAsTouched();
     hostnameCtrl.updateValueAndValidity();
     if (hostnameCtrl.value && hostnameCtrl.valid) {
-      const addedHosts = this.formGroup.get('addedHosts').value;
+      const addedHosts = this.formGroup.get('addedHosts')?.value ?? [];
       const newHostList = [...addedHosts, hostnameCtrl.value];
       this.addedHostsLength = newHostList.length;
       this.formGroup.patchValue({
         addedHosts: newHostList,
         hostname: ''
       });
+      this.formGroup.get('hostname')?.updateValueAndValidity();
     }
   }
 
   removeHost(removedHost: string) {
-    const currentAddedHosts = this.formGroup.get('addedHosts').value;
+    const currentAddedHosts = this.formGroup.get('addedHosts')?.value ?? [];
     const newHostList = currentAddedHosts.filter((currentHost) => currentHost !== removedHost);
     this.addedHostsLength = newHostList.length;
     this.formGroup.patchValue({
       addedHosts: newHostList
     });
-    this.formGroup.get('hostname').updateValueAndValidity();
+    this.formGroup.get('hostname')?.updateValueAndValidity();
   }
 
   removeAll() {
@@ -101,6 +115,6 @@ export class NvmeofSubsystemsStepTwoComponent implements OnInit, TearsheetStep {
     this.formGroup.patchValue({
       addedHosts: []
     });
-    this.formGroup.get('hostname').updateValueAndValidity();
+    this.formGroup.get('hostname')?.updateValueAndValidity();
   }
 }

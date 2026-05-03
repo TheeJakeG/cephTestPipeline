@@ -4,63 +4,36 @@ import {
   Component,
   inject,
   Input,
-  OnDestroy,
-  OnInit,
   ViewEncapsulation
 } from '@angular/core';
 import {
-  CheckboxModule,
-  DropdownModule,
   GridModule,
-  TilesModule,
   TooltipModule,
   SkeletonModule,
-  LayoutModule
+  LayoutModule,
+  TagModule
 } from 'carbon-components-angular';
 import { ProductiveCardComponent } from '~/app/shared/components/productive-card/productive-card.component';
 import { MeterChartComponent, MeterChartOptions } from '@carbon/charts-angular';
-import {
-  PrometheusService,
-  PromethuesGaugeMetricResult,
-  PromqlGuageMetric
-} from '~/app/shared/api/prometheus.service';
 import { FormatterService } from '~/app/shared/services/formatter.service';
-import { interval, Subject } from 'rxjs';
-import { startWith, switchMap, takeUntil } from 'rxjs/operators';
+import { AreaChartComponent } from '~/app/shared/components/area-chart/area-chart.component';
+import { ComponentsModule } from '~/app/shared/components/components.module';
+import { BreakdownChartData, CapacityThreshold, TrendPoint } from '~/app/shared/models/overview';
 
 const CHART_HEIGHT = '45px';
-
-const REFRESH_INTERVAL_MS = 15_000;
-
-const StorageType = {
-  ALL: $localize`All`,
-  BLOCK: $localize`Block`,
-  FILE: $localize`File system`,
-  OBJECT: $localize`Object`
-};
-
-type ChartData = {
-  group: string;
-  value: number;
-};
-
-const RawUsedByStorageType =
-  'sum by (application) (ceph_pool_bytes_used * on(pool_id) group_left(instance, name, application) ceph_pool_metadata{application=~"(.*Block.*)|(.*Filesystem.*)|(.*Object.*)|(..*)"})';
-
-const chartGroupLabels = [StorageType.BLOCK, StorageType.FILE, StorageType.OBJECT];
 
 @Component({
   selector: 'cd-overview-storage-card',
   imports: [
     GridModule,
-    TilesModule,
     ProductiveCardComponent,
     MeterChartComponent,
-    CheckboxModule,
-    DropdownModule,
     TooltipModule,
     SkeletonModule,
-    LayoutModule
+    LayoutModule,
+    AreaChartComponent,
+    ComponentsModule,
+    TagModule
   ],
   standalone: true,
   templateUrl: './overview-storage-card.component.html',
@@ -68,32 +41,40 @@ const chartGroupLabels = [StorageType.BLOCK, StorageType.FILE, StorageType.OBJEC
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class OverviewStorageCardComponent implements OnInit, OnDestroy {
-  private readonly prometheusService = inject(PrometheusService);
+export class OverviewStorageCardComponent {
   private readonly formatterService = inject(FormatterService);
   private readonly cdr = inject(ChangeDetectorRef);
-  private destroy$ = new Subject<void>();
 
   @Input()
-  set total(value: number) {
+  set totalCapacity(value: number) {
     const [totalValue, totalUnit] = this.formatterService.formatToBinary(value, true);
     if (Number.isNaN(totalValue)) return;
     this.totalRaw = totalValue;
     this.totalRawUnit = totalUnit;
-    this._setTotalAndUsed();
+    this.updateChartOptions();
   }
+
   @Input()
-  set used(value: number) {
+  set usedCapacity(value: number) {
     const [usedValue, usedUnit] = this.formatterService.formatToBinary(value, true);
     if (Number.isNaN(usedValue)) return;
     this.usedRaw = usedValue;
     this.usedRawUnit = usedUnit;
-    this._setTotalAndUsed();
+    this.updateChartOptions();
   }
-  totalRaw: number;
-  usedRaw: number;
-  totalRawUnit: string;
-  usedRawUnit: string;
+
+  @Input() consumptionTrendData: TrendPoint[] = [];
+  @Input() averageDailyConsumption = '';
+  @Input() estimatedTimeUntilFull = '';
+  @Input() breakdownData: BreakdownChartData[] = [];
+  @Input() isBreakdownLoaded = false;
+  @Input() threshold: CapacityThreshold;
+
+  totalRaw: number | null = null;
+  usedRaw: number | null = null;
+  totalRawUnit = '';
+  usedRawUnit = '';
+
   options: MeterChartOptions = {
     height: CHART_HEIGHT,
     meter: {
@@ -113,100 +94,42 @@ export class OverviewStorageCardComponent implements OnInit, OnDestroy {
       }
     }
   };
-  allData: ChartData[] = null;
-  displayData: ChartData[] = null;
-  displayUsedRaw: number;
-  selectedStorageType: string = StorageType.ALL;
-  dropdownItems = [
-    { content: StorageType.ALL },
-    { content: StorageType.BLOCK },
-    { content: StorageType.FILE },
-    { content: StorageType.OBJECT }
-  ];
 
-  private _setTotalAndUsed() {
-    // Chart reacts to 'options' and 'data' object changes only, hence mandatory to replace whole object.
+  private updateChartOptions() {
+    if (
+      this.totalRaw === null ||
+      this.usedRaw === null ||
+      !this.totalRawUnit ||
+      !this.usedRawUnit
+    ) {
+      return;
+    }
+
+    const totalInUsedUnit = this.formatterService.convertToUnit(
+      this.totalRaw,
+      this.totalRawUnit,
+      this.usedRawUnit,
+      1
+    );
     this.options = {
       ...this.options,
       meter: {
         ...this.options.meter,
         proportional: {
           ...this.options.meter.proportional,
-          total: this.totalRaw,
-          unit: this.totalRawUnit
+          total: totalInUsedUnit,
+          unit: this.usedRawUnit
         }
       },
       tooltip: {
         valueFormatter: (value) => `${value.toLocaleString()} ${this.usedRawUnit}`
       }
     };
-    this._updateCard();
+
+    this.markForCheck();
   }
 
-  private _getAllData(data: PromqlGuageMetric) {
-    const result = data?.result ?? [];
-    const chartData = result
-      .map((r: PromethuesGaugeMetricResult) => {
-        const group = r?.metric?.application;
-        const value = this.formatterService.convertToUnit(r?.value?.[1], 'B', this.usedRawUnit, 1);
-        return { group: group === 'Filesystem' ? StorageType.FILE : group, value };
-      })
-      // Removing 0 values and legends other than Block, File system, and Object.
-      .filter((r) => chartGroupLabels.includes(r?.group) && r?.value > 0);
-    return chartData;
-  }
-
-  private _setChartData() {
-    if (this.selectedStorageType === StorageType.ALL) {
-      this.displayData = this.allData;
-      this.displayUsedRaw = this.usedRaw;
-    } else {
-      this.displayData = this.allData?.filter(
-        (d: ChartData) => d.group === this.selectedStorageType
-      );
-      this.displayUsedRaw = this.displayData?.[0]?.value;
-    }
-  }
-
-  private _setDropdownItemsAndStorageType() {
-    const newData = this.allData?.map((data) => ({ content: data.group }));
-    if (newData.length) {
-      this.dropdownItems = [{ content: StorageType.ALL }, ...newData];
-    } else {
-      this.dropdownItems = [{ content: StorageType.ALL }];
-    }
-  }
-
-  private _updateCard() {
+  private markForCheck() {
     this.cdr.markForCheck();
-  }
-
-  public onStorageTypeSelect(selected: { item: { content: string; selected: true } }) {
-    this.selectedStorageType = selected?.item?.content;
-    this._setChartData();
-  }
-
-  ngOnInit() {
-    interval(REFRESH_INTERVAL_MS)
-      .pipe(
-        startWith(0),
-        switchMap(() =>
-          this.prometheusService.getPrometheusQueryData({
-            params: RawUsedByStorageType
-          })
-        ),
-        takeUntil(this.destroy$)
-      )
-      .subscribe((data: PromqlGuageMetric) => {
-        this.allData = this._getAllData(data);
-        this._setDropdownItemsAndStorageType();
-        this._setChartData();
-        this._updateCard();
-      });
-  }
-
-  ngOnDestroy(): void {
-    this.destroy$.next();
-    this.destroy$.complete();
   }
 }

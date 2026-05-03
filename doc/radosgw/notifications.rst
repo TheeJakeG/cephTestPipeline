@@ -85,7 +85,7 @@ which tells the client that it may retry later.
    control the retry frequency with ``retry_sleep_duration``.
 
 .. tip:: To minimize the latency added by asynchronous notification, we
-   recommended placing the "log" pool on fast media.
+   recommend placing the "log" pool on fast media.
 
 Persistent bucket notifications are managed by the following central configuration options:
 
@@ -170,6 +170,15 @@ HTTP
 .. confval:: rgw_http_notif_connection_timeout
 .. confval:: rgw_http_notif_max_inflight
 
+Kafka
+~~~~~
+After recovering from a broker failure, a persistent topic will try
+to resend all notifications in batches. If the topic is configured on
+the broker with a segment size smaller than our default (1MB), sending
+the messages would fail. If we know that we have such segment size
+configuration, we should send smaller batches using:
+
+.. confval:: rgw_kafka_max_batch_size
 
 Bucket Notification REST API
 ----------------------------
@@ -195,6 +204,10 @@ generated. A successful response includes the topic's `ARN`_
 (the "Amazon Resource Name", a unique identifier used to reference the topic).
 To update a topic, use the same command that you used to create it (but when
 updating, use the name of an existing topic and different endpoint values).
+Topic names must contain only alphanumeric characters, hyphens, and underscores,
+and must be between 1 and 256 characters long. To relax these requirements, use:
+
+.. confval:: rgw_relaxed_topic_names
 
 .. tip:: Any notification already associated with the topic must be re-created
    in order for the topic to update.
@@ -346,9 +359,9 @@ Request parameters:
   - ``broker``: Messages are considered "delivered" if acked by the broker. (This
     is the default.)
 
- - ``kafka-brokers``: A command-separated list of ``host:port`` of Kafka brokers:
+ - ``kafka-brokers``: A comma-separated list of ``host:port`` of Kafka brokers:
    these brokers (may contain a broker which is defined in Kafka URI) will be
-   added to Kafka URI to support sending notifcations to a Kafka cluster.
+   added to Kafka URI to support sending notifications to a Kafka cluster.
 
 .. note::
 

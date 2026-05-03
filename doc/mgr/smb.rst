@@ -262,6 +262,97 @@ Create a read-only share at a custom path in the CephFS volume:
     ceph smb share create test1 plans cephfs \
         --path=/qbranch/top/secret/plans --readonly
 
+Update Share QoS
+++++++++++++++++
+
+.. prompt:: bash #
+
+   ceph smb share update cephfs qos <cluster_id> <share_id> [--read-iops-limit=<int>] [--write-iops-limit=<int>] [--read-bw-limit=<str>] [--write-bw-limit=<str>] [--read-burst-mult=<int>] [--write-burst-mult=<int>]
+
+Update Quality of Service (QoS) settings for a CephFS-backed share. This allows administrators to apply per-share rate limits on SMB input/output (I/O) operations, specifically limits on IOPS (Input/Output Operations per Second) and bandwidth (in bytes per second) for both read and write operations. Additionally, burst multipliers can be configured to allow temporary bursts above the configured limits.
+
+Options:
+
+read_iops_limit
+    Optional integer. Maximum number of read operations per second (0 = disabled).
+    Valid range: ``0`` to ``1,000,000``. Values above this will be capped.
+write_iops_limit
+    Optional integer. Maximum number of write operations per second (0 = disabled).
+    Valid range: ``0`` to ``1,000,000``. Values above this will be capped.
+read_bw_limit
+    Optional string. Maximum allowed bandwidth for read operations (0 = disabled).
+    This can be specified as a plain integer representing bytes per second, or as a
+    human-readable string with bytes per second as a unit.
+    Example: ``"1M"`` = 1 MiB/s (1,048,576 bytes/s).
+    Valid range: ``0`` to ``1 << 40`` (≈1 T). Numeric values above this will be capped.
+write_bw_limit
+    Optional string. Maximum allowed bandwidth for write operations (0 = disabled).
+    This can be specified as a plain integer representing bytes per second, or as a
+    human-readable string with bytes per second as a unit.
+    Example: ``"1M"`` = 1 MiB/s (1,048,576 bytes/s).
+    Valid range: ``0`` to ``1 << 40`` (≈1 T). Numeric values above this will be capped.
+read_burst_mult
+    Optional integer. Burst multiplier for read operations (value ÷ 10 = multiplier),
+    allowing temporary bursts above the configured limit. Example: ``20`` = 2* the configured limit.
+    Range: 10-100 (1* to 10*), default: 15 (1.5*).
+write_burst_mult
+    Optional integer. Burst multiplier for write operations (value ÷ 10 = multiplier),
+    allowing temporary bursts above the configured limit. Example: ``20`` = 2* the configured limit.
+    Range: 10-100 (1* to 10*), default: 15 (1.5*).
+
+Behavior:
+
+- All limits are optional
+- Setting a limit to ``0`` disables that specific QoS limit
+- Setting all four limits (IOPS and bandwidth) to ``0`` completely removes QoS configuration
+- Burst multipliers only apply when their corresponding limit is enabled (non-zero)
+- Bandwidth limits can be specified with human-readable units (e.g., ``"10M"``, ``"5G"``)
+- Burst multipliers are expressed in tenths (e.g., ``15`` = 1.5*, ``20`` = 2*, ``30`` = 3*)
+
+
+Burst Behavior
+--------------
+
+The burst multiplier allows short-term I/O bursts above your configured limits.
+For example, if you set ``read_iops_limit = 1000`` and ``read_burst_mult = 20``,
+your share can handle bursts up to 2000 read operations per second for short
+periods, while maintaining an average of 1000 IOPS over time.
+
+This is useful for workloads that have occasional spikes in activity. The
+appropriate burst multiplier depends on your workload - higher values allow
+larger bursts but may temporarily consume more resources.
+
+.. note::
+   The burst multiplier only affects short-term spikes. The long-term average
+   throughput remains limited by your configured IOPS and bandwidth limits.
+
+Examples:
+
+Set QoS limits with burst multipliers for a share:
+
+.. prompt:: bash #
+
+   ceph smb share update cephfs qos foo bar \
+     --read-iops-limit=100 \
+     --write-iops-limit=200 \
+     --read-bw-limit="10M" \
+     --write-bw-limit="20M" \
+     --read-burst-mult=20 \
+     --write-burst-mult=15
+
+In this example:
+- Read burst multiplier of 20 means 2* the read IOPS limit (allowing bursts up to 200 read IOPS)
+- Write burst multiplier of 15 means 1.5* the write IOPS limit (allowing bursts up to 300 write IOPS)
+
+Disable QoS for a share:
+
+.. prompt:: bash #
+
+   ceph smb share update cephfs qos foo bar \
+     --read-iops-limit=0 \
+     --write-iops-limit=0 \
+     --read-bw-limit=0 \
+     --write-bw-limit=0
 
 Remove Share
 ++++++++++++
@@ -618,10 +709,78 @@ remote_control
     ca_cert
         Optional object. The fields are described in :ref:`tls source
         fields<tls-source-fields>`
+    locally_enabled
+        Optional boolean. If set to ``true`` this field will enable the
+        remote control service local listener. The local listener lets
+        processes on the Ceph cluster host communicate with the remote
+        control service independently of the default TCP/mTLS listener.
+        The TLS certificates configuration values do not apply to this
+        unix socket based listener.
+keybridge
+    Optional object. This object configures an SMB cluster to deploy an extra
+    ``keybridge`` service. This service acts as a bridge between the Samba file
+    server and external cryptographic and key management services. This can
+    then be used to unlock CephFS subvolumes protected with FSCrypt. The
+    configuration of the keybridge is based on ``scopes``. Each scope maps to
+    a different mechanism for fetching keys.
+    Fields:
+
+    enabled
+        Optional boolean. If explicitly set to ``true`` or ``false`` this
+        field will enable or disable the keybridge service. If left
+        unset the ``scopes`` fields will be checked - if scopes are defined
+        this will automatically enable the service.
+    scopes
+        Optional list of objects. Each object in the list defines and configures
+        a new keybridge scope. A scope of the type ``mem`` stores keys in
+        memory and is only for testing and debugging. A scope of the type
+        ``kmip`` proxies requests to KMIP servers.
+        Fields:
+
+        name
+            String. The name of the scope defines the type and identification
+            of the scope. The name takes the form ``<type>[.<sub_name>]``.
+            Each name must be unique. Current types are ``mem`` and ``kmip``.
+            Sub-names are only supported for ``kmip`` scope. The ``mem``
+            scope is unique per cluster. If the sub-name is left off the
+            system will implicitly name the scope. This can be done only once
+            per-type.
+        kmip_hosts
+            Optional list of strings. Required for type ``kmip``.
+            Specify the hosts the ``kmip`` scope will proxy to. The host values
+            may be DNS names or IPv4 or IPv6 addresses. An optional port value
+            following a colon (``:``) is supported. For IPv6 addresses only:
+            surround the address with square brackets before specifying the
+            port (example: ``[2001:db8::cafe]:9999``).
+        kmip_port
+            Optional integer. Required for type ``kmip`` unless all host
+            values include ports. Specify the port used for KMIP connections
+            for host entries that do not specify a port.
+        kmip_cert
+            Optional object. Required for type ``kmip``.
+            The fields are described in :ref:`tls source fields<tls-source-fields>`.
+        kmip_key
+            Optional object. Required for type ``kmip``.
+            The fields are described in :ref:`tls source fields<tls-source-fields>`.
+        kmip_ca_cert
+            Optional object. Required for type ``kmip``.
+            The fields are described in :ref:`tls source fields<tls-source-fields>`.
+    peer_policy
+        Optional, one of ``restricted`` or ``unrestricted``.
+        Used to control what processes the keybridge server will permit
+        for access. This option is meant for testing and development only.
+        If left unspecified the default behavior is ``restricted``.
 external_ceph_cluster:
     Optional object. The fields are described in :ref:`external Ceph cluster
     source fields<external-ceph-cluster-source-fields>`. This is an
     advanced option and should be used with caution.
+debug_level:
+    Optional object. Specify subsystem based default logging level values.
+    Supported keys are ``samba`` and ``ctdb``. Supported values include
+    numbers (``1`` through ``10`` typically) or level names such as ``INFO``
+    or ``DEBUG``. The system will translate names to numbers (for ``samba``)
+    or vice-versa as needed. Example YAML snippet:
+    ``debug_level: {smb: 8, ctdb: INFO}``.
 custom_smb_global_options
     Optional mapping. Specify key-value pairs that will be directly added to
     the global ``smb.conf`` options (or equivalent) of a Samba server.  Do
@@ -804,6 +963,48 @@ cephfs
         based implementation, currently ``samba-vfs/proxied``. This option is
         suitable for the majority of use cases and can be left unspecified for most
         shares.
+    qos
+        Optional object. Quality of Service settings for the share. Fields:
+        
+        read_iops_limit
+            Optional integer. Maximum number of read operations per second (0 = disabled).
+            Valid range: ``0`` to ``1,000,000``. Values above this will be capped.
+        write_iops_limit
+            Optional integer. Maximum number of write operations per second (0 = disabled).
+            Valid range: ``0`` to ``1,000,000``. Values above this will be capped.
+        read_bw_limit
+            Optional string. Maximum allowed bandwidth for read operations (0 = disabled).
+            This can be specified as a plain integer representing bytes per second, or as a
+            human-readable string with bytes per second as a unit.
+            Example: ``"1M"`` = 1 MiB/s (1,048,576 bytes/s).
+            Valid range: ``0`` to ``1 << 40`` (≈1 T). Numeric values above this will be capped.
+        write_bw_limit
+            Optional string. Maximum allowed bandwidth for write operations (0 = disabled).
+            This can be specified as a plain integer representing bytes per second, or as a
+            human-readable string with bytes per second as a unit.
+            Example: ``"1M"`` = 1 MiB/s (1,048,576 bytes/s).
+            Valid range: ``0`` to ``1 << 40`` (≈1 T). Numeric values above this will be capped.
+        read_burst_mult
+            Optional integer. Burst multiplier for read operations (value ÷ 10 = multiplier),
+            allowing temporary bursts above the configured limit. Example: ``20`` = 2* the configured limit.
+            Default: 15 (1.5*).
+        write_burst_mult
+            Optional integer. Burst multiplier for write operations (value ÷ 10 = multiplier),
+            allowing temporary bursts above the configured limit. Example: ``20`` = 2* the configured limit.
+            Default: 15 (1.5*).
+    fscrypt_key
+        Optional object. Configures the CephFS storage used by the share to
+        enable FSCrypt. The FSCrypt key will be acquired using the keybridge
+        service. The fields select the keybridge scope to use and the name
+        of the key.
+        Fields:
+
+        scope
+            String. A value matching one of the keybridge scopes defined for
+            the cluster this share belongs to.
+        name
+            String. A value indicating what FSCrypt key to fetch. The specific
+            value of the name depends on the scope being used.
 restrict_access
     Optional boolean, defaulting to false. If true the share will only permit
     access by users explicitly listed in ``login_control``.
@@ -851,7 +1052,8 @@ custom_smb_share_options
     things in ways that the Ceph team can not help with. This special key will
     automatically be removed from the list of options passed to Samba.
 
-The following is an example of a share:
+The following is an example of a share with QoS settings including burst
+multipliers and human-readable bandwidth limits:
 
 .. code-block:: yaml
 
@@ -864,9 +1066,50 @@ The following is an example of a share:
       path: /pics
       subvolumegroup: smbshares
       subvolume: staff
+      qos:
+        read_iops_limit: 100
+        write_iops_limit: 50
+        read_bw_limit: "10M"
+        write_bw_limit: "5M"
+        read_burst_mult: 20
+        write_burst_mult: 15
 
+Another example with plain byte values:
 
-Another example, this time of a share with an intent to be removed:
+.. code-block:: yaml
+
+    resource_type: ceph.smb.share
+    cluster_id: tango
+    share_id: sp1
+    cephfs:
+      volume: cephfs
+      path: /pics
+      qos:
+        read_iops_limit: 100
+        write_iops_limit: 50
+        read_bw_limit: 10485760      # 10 MB/s
+        write_bw_limit: 5242880       # 5 MB/s
+        read_burst_mult: 10           # 1× burst
+        write_burst_mult: 20          # 2× burst
+
+Another example, this time of a share with QoS disabled:
+
+.. code-block:: yaml
+
+    resource_type: ceph.smb.share
+    cluster_id: tango
+    share_id: sp2
+    cephfs:
+      volume: cephfs
+      path: /data
+      qos:
+        read_iops_limit: 0
+        write_iops_limit: 0
+        read_bw_limit: 0
+        write_bw_limit: 0
+        # Note: burst multipliers are ignored when limits are disabled
+
+And finally, a share with an intent to be removed:
 
 .. code-block:: yaml
 
@@ -1100,6 +1343,13 @@ configuration file. First, create the YAML with the contents:
           path: /pics
           subvolumegroup: smb1
           subvolume: staff
+          qos:
+            read_iops_limit: 100
+            write_iops_limit: 50
+            read_bw_limit: "10MiB"
+            write_bw_limit: "5MiB"
+            read_burst_mult: 20
+            write_burst_mult: 15
 
 
 Save this text to a YAML file named ``resources.yaml`` and make it available

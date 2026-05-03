@@ -56,7 +56,7 @@ Starting the Upgrade
    large-scale CephFS deployments because the cluster cannot quickly reduce active MDS(s)
    to `1` and a single active MDS cannot easily handle the load of all clients
    even for a short time. Therefore, to upgrade MDS(s) without reducing ``max_mds``,
-   the ``fail_fs`` option can to be set to ``true`` (default value is ``false``) prior
+   the ``fail_fs`` option can be set to ``true`` (default value is ``false``) prior
    to initiating the upgrade:
 
    .. prompt:: bash #
@@ -214,7 +214,7 @@ following command:
 This alert (``UPGRADE_FAILED_PULL``) means that Ceph was unable to pull the
 container image for the target version. This can happen if you specify a
 version or container image that does not exist (e.g. "1.2.3"), or if the
-container registry can not be reached by one or more hosts in the cluster.
+container registry cannot be reached by one or more hosts in the cluster.
 
 To cancel the existing upgrade and to specify a different target version, run
 the following commands:

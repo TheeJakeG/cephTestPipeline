@@ -3092,7 +3092,8 @@ int MotrStore::list_roles(const DoutPrefixProvider *dpp,
 int DaosStore::store_oidc_provider(const DoutPrefixProvider* dpp,
                                    optional_yield y,
                                    const RGWOIDCProviderInfo& info,
-                                   bool exclusive)
+                                   bool exclusive,
+                                   RGWObjVersionTracker* objv_tracker)
 {
   return -ENOTSUP;
 }
@@ -3101,7 +3102,8 @@ int DaosStore::load_oidc_provider(const DoutPrefixProvider* dpp,
                                   optional_yield y,
                                   std::string_view tenant,
                                   std::string_view url,
-                                  RGWOIDCProviderInfo& info)
+                                  RGWOIDCProviderInfo& info,
+                                  RGWObjVersionTracker* objv_tracker)
 {
   return -ENOTSUP;
 }
@@ -3877,6 +3879,12 @@ int MotrStore::init_metadata_cache(const DoutPrefixProvider *dpp,
   int MotrLuaManager::get_script(const DoutPrefixProvider* dpp, optional_yield y, const std::string& key, std::string& script)
   {
     return -ENOENT;
+  }
+
+  std::tuple<rgw::lua::LuaCodeType, int> MotrLuaManager::get_script_or_bytecode(const DoutPrefixProvider* dpp, optional_yield y,
+                                                                                const std::string& key)
+  {
+    return std::make_tuple("", -ENOENT);
   }
 
   int MotrLuaManager::put_script(const DoutPrefixProvider* dpp, optional_yield y, const std::string& key, const std::string& script)

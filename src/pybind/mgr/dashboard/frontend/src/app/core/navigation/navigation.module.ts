@@ -18,7 +18,8 @@ import {
   TagModule,
   ProgressBarModule,
   StructuredListModule,
-  SearchModule
+  SearchModule,
+  ModalModule
 } from 'carbon-components-angular';
 
 import { AppRoutingModule } from '~/app/app-routing.module';
@@ -59,6 +60,12 @@ import ErrorFilledIcon from '@carbon/icons/es/error--filled/16';
 import InformationFilledIcon from '@carbon/icons/es/information--filled/16';
 import WarningFilledIcon from '@carbon/icons/es/warning--filled/16';
 import NotificationFilledIcon from '@carbon/icons/es/notification--filled/16';
+import CircleDashIcon20 from '@carbon/icons/es/circle-dash/20';
+import CheckmarkOutlineIcon20 from '@carbon/icons/es/checkmark--outline/20';
+import ArrowRightIcon from '@carbon/icons/es/arrow--right/20';
+import IbmCloudBareMetalServerIcon from '@carbon/icons/es/ibm-cloud--bare-metal-server/20';
+import IbmCloudDedicatedHostIcon from '@carbon/icons/es/ibm-cloud--dedicated-host/20';
+import VmdkDiskIcon from '@carbon/icons/es/vmdk-disk/20';
 
 import CloseIcon from '@carbon/icons/es/close/16';
 import { NotificationPanelComponent } from './notification-panel/notification-panel/notification-panel.component';
@@ -88,7 +95,8 @@ import { NotificationFooterComponent } from './notification-panel/notification-f
     TagModule,
     ProgressBarModule,
     StructuredListModule,
-    SearchModule
+    SearchModule,
+    ModalModule
   ],
   declarations: [
     AboutComponent,
@@ -134,6 +142,8 @@ export class NavigationModule {
       FileIcon,
       ObservabilityIcon,
       AdminIcon,
+      IbmCloudBareMetalServerIcon,
+      IbmCloudDedicatedHostIcon,
       LockedIcon,
       LogoutIcon,
       CheckmarkFilledIcon,
@@ -142,7 +152,11 @@ export class NavigationModule {
       WarningFilledIcon,
       NotificationFilledIcon,
       NotificationNewIcon,
-      CloseIcon
+      CloseIcon,
+      CircleDashIcon20,
+      CheckmarkOutlineIcon20,
+      ArrowRightIcon,
+      VmdkDiskIcon
     ]);
   }
 }

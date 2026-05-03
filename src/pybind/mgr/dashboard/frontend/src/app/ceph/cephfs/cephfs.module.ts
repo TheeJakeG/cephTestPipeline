@@ -47,12 +47,13 @@ import {
   ModalModule,
   NumberModule,
   PlaceholderModule,
+  RadioModule,
   SelectModule,
+  TagModule,
   TimePickerModule,
   TilesModule,
   TreeviewModule,
   TabsModule,
-  RadioModule,
   NotificationModule
 } from 'carbon-components-angular';
 
@@ -62,6 +63,7 @@ import Close from '@carbon/icons/es/close/32';
 import Trash from '@carbon/icons/es/trash-can/32';
 import { CephfsMirroringWizardComponent } from './cephfs-mirroring-wizard/cephfs-mirroring-wizard.component';
 import { CephfsFilesystemSelectorComponent } from './cephfs-filesystem-selector/cephfs-filesystem-selector.component';
+import { CephfsMirroringEntityComponent } from './cephfs-mirroring-entity/cephfs-mirroring-entity.component';
 
 @NgModule({
   imports: [
@@ -92,10 +94,12 @@ import { CephfsFilesystemSelectorComponent } from './cephfs-filesystem-selector/
     LayoutModule,
     ComboBoxModule,
     IconModule,
+    RadioModule,
     BaseChartDirective,
     TabsModule,
     RadioModule,
     TilesModule,
+    TagModule,
     NotificationModule
   ],
   declarations: [
@@ -120,7 +124,8 @@ import { CephfsFilesystemSelectorComponent } from './cephfs-filesystem-selector/
     CephfsMirroringListComponent,
     CephfsMirroringWizardComponent,
     CephfsFilesystemSelectorComponent,
-    CephfsMirroringErrorComponent
+    CephfsMirroringErrorComponent,
+    CephfsMirroringEntityComponent
   ],
   providers: [provideCharts(withDefaultRegisterables())]
 })

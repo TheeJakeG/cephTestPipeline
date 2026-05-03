@@ -22,7 +22,7 @@ from ceph.deployment.hostspec import SpecValidationError
 from ceph.deployment.utils import unwrap_ipv6
 from ceph.utils import datetime_now
 from ceph.cephadm.images import NonCephImageServiceTypes
-from mgr_util import to_pretty_timedelta, format_bytes, parse_combined_pem_file
+from mgr_util import to_pretty_timedelta, format_bytes, parse_combined_pem_file, NvmeofMetadataPoolHelper
 from mgr_module import MgrModule, HandleCommandResult, Option
 from object_format import Format
 
@@ -761,7 +761,7 @@ class OrchestratorCli(OrchestratorClientMixin, MgrModule):
             table.right_padding_width = 2
             for host in natsorted(hosts, key=lambda h: h.hostname):
                 row = (host.hostname, host.addr, ','.join(
-                    host.labels), host.status.capitalize())
+                    sorted(host.labels)), host.status.capitalize())
 
                 if show_detail and isinstance(host, HostDetails):
                     row += (host.server, host.cpu_summary, host.ram,
@@ -2119,8 +2119,9 @@ Usage:
 
     @OrchestratorCLICommand.Write('orch apply nvmeof')
     def _apply_nvmeof(self,
-                      pool: str,
-                      group: str,
+                      _end_positional_: int = 0,
+                      pool: str = ".nvmeof",
+                      group: str = '',
                       placement: Optional[str] = None,
                       unmanaged: bool = False,
                       dry_run: bool = False,
@@ -2128,11 +2129,19 @@ Usage:
                       no_overwrite: bool = False,
                       inbuf: Optional[str] = None) -> HandleCommandResult:
         """Scale an nvmeof service"""
+        if group == '':
+            raise OrchestratorValidationError('The --group argument is required')
+
         if inbuf:
             raise OrchestratorValidationError('unrecognized command -i; -h or --help for usage')
 
+        if pool == ".nvmeof":
+            nvmeof_pool_helper = NvmeofMetadataPoolHelper(self)
+            nvmeof_pool_helper.create_pool_if_needed()
+
+        cleanpool = pool.lstrip('.')
         spec = NvmeofServiceSpec(
-            service_id=f'{pool}.{group}' if group else pool,
+            service_id=f'{cleanpool}.{group}' if group else cleanpool,
             pool=pool,
             group=group,
             placement=PlacementSpec.from_string(placement),
@@ -2580,8 +2589,9 @@ Usage:
                        ceph_version: Optional[str] = None) -> HandleCommandResult:
         """Initiate upgrade"""
         self._upgrade_check_image_name(image, ceph_version)
-        dtypes = daemon_types.split(',') if daemon_types is not None else None
-        service_names = services.split(',') if services is not None else None
+        # Split comma-separated lists and trim whitespace so "mon, crash" and "mon,crash" are equivalent.
+        dtypes = [d.strip() for d in daemon_types.split(',')] if daemon_types is not None else None
+        service_names = [s.strip() for s in services.split(',')] if services is not None else None
         completion = self.upgrade_start(image, ceph_version, dtypes, hosts, service_names, limit)
         raise_if_exception(completion)
         return HandleCommandResult(stdout=completion.result_str())

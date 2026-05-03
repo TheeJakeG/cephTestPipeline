@@ -820,6 +820,8 @@ paths:
                 schedule_interval:
                   default: ''
                   type: string
+                schedule_level:
+                  type: string
                 size:
                   type: integer
               type: object
@@ -4702,6 +4704,102 @@ paths:
       - jwt: []
       tags:
       - CephFSSubvolume
+  /api/cephfs/subvolume/{vol_name}/snapshot-visibility:
+    get:
+      parameters:
+      - in: path
+        name: vol_name
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: subvol_name
+        required: true
+        schema:
+          type: string
+      - default: ''
+        in: query
+        name: group_name
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: OK
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      tags:
+      - CephFSSubvolume
+    put:
+      parameters:
+      - in: path
+        name: vol_name
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                group_name:
+                  default: ''
+                  type: string
+                subvol_name:
+                  type: string
+                value:
+                  type: string
+              required:
+              - subvol_name
+              - value
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      tags:
+      - CephFSSubvolume
   /api/cephfs/{fs_id}:
     get:
       parameters:
@@ -6677,6 +6775,11 @@ paths:
                   type: string
                 container_image:
                   type: string
+                force:
+                  default: false
+                  description: When true, force stops/restarts (bypasses ok-to-stop
+                    warnings; e.g. RGW, NFS, SMB, NVMe-oF, monitoring daemons).
+                  type: boolean
               type: object
       responses:
         '200':
@@ -8191,11 +8294,20 @@ paths:
                       num_mons:
                         description: Number of monitors
                         type: integer
+                      quorum:
+                        description: List of monitors in quorum
+                        items:
+                          type: integer
+                        type: array
                     required: &id054
                     - num_mons
+                    - quorum
                     type: object
                   num_hosts:
                     description: Count of hosts
+                    type: integer
+                  num_hosts_available:
+                    description: Count of available hosts
                     type: integer
                   num_iscsi_gateways:
                     description: Iscsi gateways status
@@ -8260,12 +8372,16 @@ paths:
                           - count
                           type: object
                         type: array
+                      recovering_bytes_per_sec:
+                        description: Total recovery in bytes
+                        type: integer
                     required: &id058
                     - pgs_by_state
                     - num_pools
                     - num_pgs
                     - bytes_used
                     - bytes_total
+                    - recovering_bytes_per_sec
                     type: object
                 required: &id059
                 - fsid
@@ -8278,6 +8394,7 @@ paths:
                 - num_rgw_gateways
                 - num_iscsi_gateways
                 - num_hosts
+                - num_hosts_available
                 type: object
             application/vnd.ceph.api.v1.0+json:
               schema:
@@ -8353,10 +8470,18 @@ paths:
                       num_mons:
                         description: Number of monitors
                         type: integer
+                      quorum:
+                        description: List of monitors in quorum
+                        items:
+                          type: integer
+                        type: array
                     required: *id054
                     type: object
                   num_hosts:
                     description: Count of hosts
+                    type: integer
+                  num_hosts_available:
+                    description: Count of available hosts
                     type: integer
                   num_iscsi_gateways:
                     description: Iscsi gateways status
@@ -8414,6 +8539,9 @@ paths:
                           required: *id057
                           type: object
                         type: array
+                      recovering_bytes_per_sec:
+                        description: Total recovery in bytes
+                        type: integer
                     required: *id058
                     type: object
                 required: *id059
@@ -11060,6 +11188,92 @@ paths:
       summary: Get Monitor Details
       tags:
       - Monitor
+  /api/motd:
+    post:
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                expires:
+                  type: string
+                message:
+                  type: string
+                severity:
+                  type: string
+              required:
+              - severity
+              - expires
+              - message
+              type: object
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource created.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      tags:
+      - Motd
+  /api/motd/clear:
+    delete:
+      parameters: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '204':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource deleted.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      tags:
+      - Motd
   /api/multi-cluster/auth:
     post:
       parameters: []
@@ -12435,13 +12649,21 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12494,22 +12716,87 @@ paths:
       - jwt: []
       tags:
       - NVMe-oF Gateway
+  /api/nvmeof/gateway/io_stats:
+    put:
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                enabled:
+                  description: Enable IO statistics collection
+                  type: boolean
+                gw_group:
+                  description: NVMeoF gateway group
+                  type: string
+                server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
+              required:
+              - enabled
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Enable or disable IO statistics collection
+      tags:
+      - NVMe-oF Gateway
   /api/nvmeof/gateway/listener_info/{nqn}:
     get:
       parameters:
-      - in: path
+      - description: NVMeoF subsystem NQN
+        in: path
         name: nqn
         required: true
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12540,13 +12827,21 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12581,10 +12876,16 @@ paths:
             schema:
               properties:
                 gw_group:
+                  description: NVMeoF gateway group
                   type: string
                 log_level:
+                  description: Log level
                   type: string
                 server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - log_level
@@ -12626,13 +12927,21 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12663,13 +12972,21 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12700,18 +13017,27 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: Get all log flags
         in: query
         name: all_log_flags
         schema:
-          type: string
+          type: boolean
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12746,14 +13072,24 @@ paths:
             schema:
               properties:
                 extra_log_flags:
-                  type: string
+                  description: Extra log flags
+                  items:
+                    type: string
+                  type: array
                 gw_group:
+                  description: NVMeoF gateway group
                   type: string
                 log_level:
+                  description: SPDK log level
                   type: string
                 print_level:
+                  description: SPDK print level
                   type: string
                 server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               type: object
       responses:
@@ -12798,10 +13134,18 @@ paths:
             schema:
               properties:
                 extra_log_flags:
-                  type: string
+                  description: Extra log flags
+                  items:
+                    type: string
+                  type: array
                 gw_group:
+                  description: NVMeoF gateway group
                   type: string
                 server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               type: object
       responses:
@@ -12841,13 +13185,21 @@ paths:
     get:
       parameters:
       - allowEmptyValue: true
+        description: NVMeoF gateway group
         in: query
         name: gw_group
         schema:
           type: string
       - allowEmptyValue: true
+        description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -12883,29 +13235,40 @@ paths:
               properties:
                 dhchap_key:
                   description: Subsystem DH-HMAC-CHAP key
-                  type: integer
-                enable_ha:
-                  default: true
-                  description: Enable high availability
-                  type: boolean
+                  type: string
                 gw_group:
                   description: NVMeoF gateway group
                   type: string
                 max_namespaces:
                   description: Maximum number of namespaces
                   type: integer
+                network_mask:
+                  description: Network mask to automatically create listeners
+                  items:
+                    type: string
+                  type: array
                 no_group_append:
                   default: false
                   description: Do not append gateway group name to the NQN
-                  type: integer
+                  type: boolean
                 nqn:
                   description: NVMeoF subsystem NQN
                   type: string
+                port:
+                  description: Port to use for the created listeners
+                  type: integer
+                secure_listeners:
+                  default: false
+                  description: Make all the auto-listeners for this subsystem secure
+                  type: boolean
                 serial_number:
                   description: Subsystem serial number
-                  type: integer
+                  type: string
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - nqn
@@ -12970,6 +13333,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '202':
           content:
@@ -13023,6 +13392,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -13068,6 +13443,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -13102,12 +13483,6 @@ paths:
         schema:
           type: string
       - allowEmptyValue: true
-        description: Clear any host alert signal after getting its value
-        in: query
-        name: clear_alerts
-        schema:
-          type: boolean
-      - allowEmptyValue: true
         description: NVMeoF gateway group
         in: query
         name: gw_group
@@ -13117,6 +13492,12 @@ paths:
         description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -13156,6 +13537,8 @@ paths:
           application/json:
             schema:
               properties:
+                dhchap_controller_key:
+                  type: string
                 dhchap_key:
                   type: string
                 gw_group:
@@ -13168,6 +13551,9 @@ paths:
                   type: string
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - host_nqn
@@ -13232,6 +13618,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '202':
           content:
@@ -13265,6 +13657,268 @@ paths:
       summary: Disallow hosts from accessing an NVMeoF subsystem
       tags:
       - NVMe-oF Subsystem Host Allowlist
+  /api/nvmeof/subsystem/{nqn}/host/{host_nqn}/change_controller_key:
+    put:
+      parameters:
+      - description: NVMeoF subsystem NQN
+        in: path
+        name: nqn
+        required: true
+        schema:
+          type: string
+      - description: NVMeoF host NQN
+        in: path
+        name: host_nqn
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                dhchap_controller_key:
+                  description: Host DH-HMAC-CHAP controller key
+                  type: string
+                gw_group:
+                  description: NVMeoF gateway group
+                  type: string
+                server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
+              required:
+              - dhchap_controller_key
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Change host DH-HMAC-CHAP controller key
+      tags:
+      - NVMe-oF Subsystem Host Allowlist
+  /api/nvmeof/subsystem/{nqn}/host/{host_nqn}/change_key:
+    put:
+      parameters:
+      - description: NVMeoF subsystem NQN
+        in: path
+        name: nqn
+        required: true
+        schema:
+          type: string
+      - description: NVMeoF host NQN
+        in: path
+        name: host_nqn
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                dhchap_key:
+                  description: Host DH-HMAC-CHAP key
+                  type: string
+                gw_group:
+                  description: NVMeoF gateway group
+                  type: string
+                server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
+              required:
+              - dhchap_key
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Change host DH-HMAC-CHAP key
+      tags:
+      - NVMe-oF Subsystem Host Allowlist
+  /api/nvmeof/subsystem/{nqn}/host/{host_nqn}/del_controller_key:
+    put:
+      parameters:
+      - description: NVMeoF subsystem NQN
+        in: path
+        name: nqn
+        required: true
+        schema:
+          type: string
+      - description: NVMeoF host NQN.
+        in: path
+        name: host_nqn
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                gw_group:
+                  description: NVMeoF gateway group
+                  type: string
+                server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Delete host DH-HMAC-CHAP controller key
+      tags:
+      - NVMe-oF Subsystem Host Allowlist
+  /api/nvmeof/subsystem/{nqn}/host/{host_nqn}/del_key:
+    put:
+      parameters:
+      - description: NVMeoF subsystem NQN
+        in: path
+        name: nqn
+        required: true
+        schema:
+          type: string
+      - description: NVMeoF host NQN.
+        in: path
+        name: host_nqn
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                gw_group:
+                  description: NVMeoF gateway group
+                  type: string
+                server_address:
+                  description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Delete host DH-HMAC-CHAP key
+      tags:
+      - NVMe-oF Subsystem Host Allowlist
   /api/nvmeof/subsystem/{nqn}/listener:
     get:
       parameters:
@@ -13284,6 +13938,12 @@ paths:
         description: NVMeoF gateway address
         in: query
         name: server_address
+        schema:
+          type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
         schema:
           type: string
       responses:
@@ -13333,6 +13993,10 @@ paths:
                 host_name:
                   description: NVMeoF hostname
                   type: string
+                secure:
+                  default: false
+                  description: Use a secure channel
+                  type: boolean
                 server_address:
                   description: NVMeoF gateway address
                   type: string
@@ -13343,6 +14007,11 @@ paths:
                   default: 4420
                   description: NVMeoF transport service port
                   type: integer
+                verify_host_name:
+                  default: false
+                  description: Fail if the host name doesn't match the gateway's host
+                    name
+                  type: boolean
               required:
               - host_name
               - traddr
@@ -13490,6 +14159,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -13539,6 +14214,15 @@ paths:
                   default: false
                   description: Disable auto resize
                   type: string
+                encryption_algorithm:
+                  description: Algorithm to use for encryption
+                  type: string
+                encryption_format:
+                  description: Encryption format(s) to use, LUKS1 or LUKS2, separated
+                    by commas
+                  items:
+                    type: string
+                  type: array
                 force:
                   default: false
                   description: Force create namespace even it image is used by other
@@ -13547,15 +14231,27 @@ paths:
                 gw_group:
                   description: NVMeoF gateway group
                   type: string
+                key_id:
+                  description: Key ID(s) to use for encryption pass phrases, separated
+                    by commas
+                  items:
+                    type: string
+                  type: array
                 load_balancing_group:
                   description: Load balancing group
                   type: integer
+                location:
+                  description: Gateway location for namespace
+                  type: string
                 no_auto_visible:
                   default: false
                   description: Namespace will be visible only for the allowed hosts
                   type: boolean
                 nsid:
                   description: Create RBD image
+                  type: string
+                rados_namespace:
+                  description: RADOS namespace name
                   type: string
                 rbd_image_name:
                   description: RBD image name
@@ -13577,6 +14273,9 @@ paths:
                 size:
                   description: Deprecated. Use `rbd_image_size` instead
                   type: integer
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
                 trash_image:
                   default: false
                   description: Trash the RBD image when namespace is removed
@@ -13650,6 +14349,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '202':
           content:
@@ -13709,6 +14414,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -13758,6 +14469,9 @@ paths:
                 load_balancing_group:
                   description: Load balancing group
                   type: integer
+                location:
+                  description: Namespace location
+                  type: string
                 r_mbytes_per_second:
                   description: Read MB/s
                   type: integer
@@ -13772,6 +14486,9 @@ paths:
                   type: integer
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
                 trash_image:
                   description: Trash RBD image after removing namespace
@@ -13837,6 +14554,9 @@ paths:
                 server_address:
                   description: NVMeoF gateway address
                   type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
               required:
               - host_nqn
               type: object
@@ -13901,6 +14621,9 @@ paths:
                   type: integer
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               type: object
       responses:
@@ -13969,6 +14692,9 @@ paths:
                 server_address:
                   description: NVMeoF gateway address
                   type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
               required:
               - auto_visible
               type: object
@@ -14035,6 +14761,9 @@ paths:
                 server_address:
                   description: NVMeoF gateway address
                   type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
               required:
               - host_nqn
               type: object
@@ -14098,6 +14827,12 @@ paths:
         name: server_address
         schema:
           type: string
+      - allowEmptyValue: true
+        description: NVMeoF gateway address (deprecated)
+        in: query
+        name: traddr
+        schema:
+          type: string
       responses:
         '200':
           content:
@@ -14147,6 +14882,9 @@ paths:
                   type: string
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               type: object
       responses:
@@ -14210,6 +14948,9 @@ paths:
                   type: integer
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - rbd_image_size
@@ -14276,6 +15017,9 @@ paths:
                   type: string
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - auto_resize_enabled
@@ -14352,6 +15096,9 @@ paths:
                 server_address:
                   description: NVMeoF gateway address
                   type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
+                  type: string
                 w_mbytes_per_second:
                   description: Write MB/s
                   type: integer
@@ -14417,6 +15164,9 @@ paths:
                   type: boolean
                 server_address:
                   description: NVMeoF gateway address
+                  type: string
+                traddr:
+                  description: NVMeoF gateway address (deprecated)
                   type: string
               required:
               - rbd_trash_image_on_delete
@@ -18819,6 +19569,8 @@ paths:
                   type: string
                 realm_token:
                   type: string
+                tier_type:
+                  type: string
                 zone_name:
                   type: string
               required:
@@ -20300,6 +21052,12 @@ paths:
                   type: boolean
                 secret_key:
                   type: string
+                sync_from:
+                  default: ''
+                  type: string
+                sync_from_all:
+                  default: ''
+                  type: string
                 tier_type:
                   default: ''
                   type: string
@@ -20730,6 +21488,12 @@ paths:
                 storage_class:
                   default: ''
                   type: string
+                sync_from:
+                  default: ''
+                  type: string
+                sync_from_all:
+                  default: ''
+                  type: string
                 tier_type:
                   default: ''
                   type: string
@@ -21016,6 +21780,11 @@ paths:
       - in: path
         name: storage_class
         required: true
+        schema:
+          type: string
+      - default: ''
+        in: query
+        name: zone_name
         schema:
           type: string
       responses:
@@ -23418,6 +24187,15 @@ paths:
                   name:
                     description: Name of the share
                     type: string
+                  read_bw_limit:
+                    description: 'QoS: max read bandwidth B/s (0=disabled)'
+                    type: integer
+                  read_delay_max:
+                    description: 'QoS: max read delay in seconds (0-300)'
+                    type: integer
+                  read_iops_limit:
+                    description: 'QoS: max read IOPS (0=disabled)'
+                    type: integer
                   readonly:
                     description: Indicates if the share is read-only
                     type: boolean
@@ -23427,6 +24205,15 @@ paths:
                   share_id:
                     description: Unique identifier for the share
                     type: string
+                  write_bw_limit:
+                    description: 'QoS: max write bandwidth B/s (0=disabled)'
+                    type: integer
+                  write_delay_max:
+                    description: 'QoS: max write delay in seconds (0-300)'
+                    type: integer
+                  write_iops_limit:
+                    description: 'QoS: max write IOPS (0=disabled)'
+                    type: integer
                 required: &id158
                 - resource_type
                 - cluster_id
@@ -23436,6 +24223,12 @@ paths:
                 - readonly
                 - browseable
                 - cephfs
+                - read_iops_limit
+                - write_iops_limit
+                - read_bw_limit
+                - write_bw_limit
+                - read_delay_max
+                - write_delay_max
                 type: object
             application/vnd.ceph.api.v1.0+json:
               schema:
@@ -23473,6 +24266,15 @@ paths:
                   name:
                     description: Name of the share
                     type: string
+                  read_bw_limit:
+                    description: 'QoS: max read bandwidth B/s (0=disabled)'
+                    type: integer
+                  read_delay_max:
+                    description: 'QoS: max read delay in seconds (0-300)'
+                    type: integer
+                  read_iops_limit:
+                    description: 'QoS: max read IOPS (0=disabled)'
+                    type: integer
                   readonly:
                     description: Indicates if the share is read-only
                     type: boolean
@@ -23482,6 +24284,15 @@ paths:
                   share_id:
                     description: Unique identifier for the share
                     type: string
+                  write_bw_limit:
+                    description: 'QoS: max write bandwidth B/s (0=disabled)'
+                    type: integer
+                  write_delay_max:
+                    description: 'QoS: max write delay in seconds (0-300)'
+                    type: integer
+                  write_iops_limit:
+                    description: 'QoS: max write IOPS (0=disabled)'
+                    type: integer
                 required: *id158
                 type: object
           description: OK
@@ -23567,6 +24378,15 @@ paths:
                             name:
                               description: Name of the share
                               type: string
+                            read_bw_limit:
+                              description: 'QoS: max read bandwidth B/s (0=disabled)'
+                              type: integer
+                            read_delay_max:
+                              description: 'QoS: max read delay in seconds (0-300)'
+                              type: integer
+                            read_iops_limit:
+                              description: 'QoS: max read IOPS (0=disabled)'
+                              type: integer
                             readonly:
                               description: Indicates if the share is read-only
                               type: boolean
@@ -23576,6 +24396,15 @@ paths:
                             share_id:
                               description: Unique identifier for the share
                               type: string
+                            write_bw_limit:
+                              description: 'QoS: max write bandwidth B/s (0=disabled)'
+                              type: integer
+                            write_delay_max:
+                              description: 'QoS: max write delay in seconds (0-300)'
+                              type: integer
+                            write_iops_limit:
+                              description: 'QoS: max write IOPS (0=disabled)'
+                              type: integer
                           required: &id160
                           - resource_type
                           - cluster_id
@@ -23585,6 +24414,12 @@ paths:
                           - readonly
                           - browseable
                           - cephfs
+                          - read_iops_limit
+                          - write_iops_limit
+                          - read_bw_limit
+                          - write_bw_limit
+                          - read_delay_max
+                          - write_delay_max
                           type: object
                         state:
                           description: The current state of the resource,                        e.g.,
@@ -23650,6 +24485,15 @@ paths:
                             name:
                               description: Name of the share
                               type: string
+                            read_bw_limit:
+                              description: 'QoS: max read bandwidth B/s (0=disabled)'
+                              type: integer
+                            read_delay_max:
+                              description: 'QoS: max read delay in seconds (0-300)'
+                              type: integer
+                            read_iops_limit:
+                              description: 'QoS: max read IOPS (0=disabled)'
+                              type: integer
                             readonly:
                               description: Indicates if the share is read-only
                               type: boolean
@@ -23659,6 +24503,15 @@ paths:
                             share_id:
                               description: Unique identifier for the share
                               type: string
+                            write_bw_limit:
+                              description: 'QoS: max write bandwidth B/s (0=disabled)'
+                              type: integer
+                            write_delay_max:
+                              description: 'QoS: max write delay in seconds (0-300)'
+                              type: integer
+                            write_iops_limit:
+                              description: 'QoS: max write IOPS (0=disabled)'
+                              type: integer
                           required: *id160
                           type: object
                         state:
@@ -23698,6 +24551,78 @@ paths:
       security:
       - jwt: []
       summary: Create smb share
+      tags:
+      - SMB
+  /api/smb/share/qos:
+    put:
+      description: "\n        Update QoS rate limit parameters for an SMB share.\n\
+        \        Omitted parameters are left unchanged. Use 0 to disable a limit.\n\
+        \        "
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                cluster_id:
+                  description: Unique identifier for the cluster
+                  type: string
+                read_bw_limit:
+                  description: Max read bandwidth B/s (0=disabled)
+                  type: integer
+                read_delay_max:
+                  description: Max read delay in seconds (0-300)
+                  type: integer
+                read_iops_limit:
+                  description: Max read IOPS (0=disabled, 0-1000000)
+                  type: integer
+                share_id:
+                  description: Unique identifier for the share
+                  type: string
+                write_bw_limit:
+                  description: Max write bandwidth B/s (0=disabled)
+                  type: integer
+                write_delay_max:
+                  description: Max write delay in seconds (0-300)
+                  type: integer
+                write_iops_limit:
+                  description: Max write IOPS (0=disabled, 0-1000000)
+                  type: integer
+              required:
+              - cluster_id
+              - share_id
+              type: object
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Resource updated.
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+            application/vnd.ceph.api.v1.0+json:
+              schema:
+                type: object
+          description: Operation is still executing. Please check the task queue.
+        '400':
+          description: Operation exception. Please check the response body for details.
+        '401':
+          description: Unauthenticated access. Please login first.
+        '403':
+          description: Unauthorized access. Please check your permissions.
+        '500':
+          description: Unexpected error. Please check the response body for the stack
+            trace.
+      security:
+      - jwt: []
+      summary: Update SMB share QoS rate limiting
       tags:
       - SMB
   /api/smb/share/{cluster_id}/{share_id}:
@@ -23812,6 +24737,15 @@ paths:
                   name:
                     description: Name of the share
                     type: string
+                  read_bw_limit:
+                    description: 'QoS: max read bandwidth B/s (0=disabled)'
+                    type: integer
+                  read_delay_max:
+                    description: 'QoS: max read delay in seconds (0-300)'
+                    type: integer
+                  read_iops_limit:
+                    description: 'QoS: max read IOPS (0=disabled)'
+                    type: integer
                   readonly:
                     description: Indicates if the share is read-only
                     type: boolean
@@ -23821,6 +24755,15 @@ paths:
                   share_id:
                     description: Unique identifier for the share
                     type: string
+                  write_bw_limit:
+                    description: 'QoS: max write bandwidth B/s (0=disabled)'
+                    type: integer
+                  write_delay_max:
+                    description: 'QoS: max write delay in seconds (0-300)'
+                    type: integer
+                  write_iops_limit:
+                    description: 'QoS: max write IOPS (0=disabled)'
+                    type: integer
                 required: &id164
                 - resource_type
                 - cluster_id
@@ -23830,6 +24773,12 @@ paths:
                 - readonly
                 - browseable
                 - cephfs
+                - read_iops_limit
+                - write_iops_limit
+                - read_bw_limit
+                - write_bw_limit
+                - read_delay_max
+                - write_delay_max
                 type: object
             application/vnd.ceph.api.v1.0+json:
               schema:
@@ -23867,6 +24816,15 @@ paths:
                   name:
                     description: Name of the share
                     type: string
+                  read_bw_limit:
+                    description: 'QoS: max read bandwidth B/s (0=disabled)'
+                    type: integer
+                  read_delay_max:
+                    description: 'QoS: max read delay in seconds (0-300)'
+                    type: integer
+                  read_iops_limit:
+                    description: 'QoS: max read IOPS (0=disabled)'
+                    type: integer
                   readonly:
                     description: Indicates if the share is read-only
                     type: boolean
@@ -23876,6 +24834,15 @@ paths:
                   share_id:
                     description: Unique identifier for the share
                     type: string
+                  write_bw_limit:
+                    description: 'QoS: max write bandwidth B/s (0=disabled)'
+                    type: integer
+                  write_delay_max:
+                    description: 'QoS: max write delay in seconds (0-300)'
+                    type: integer
+                  write_iops_limit:
+                    description: 'QoS: max write IOPS (0=disabled)'
+                    type: integer
                 required: *id164
                 type: object
           description: OK
@@ -26545,6 +27512,8 @@ tags:
   name: MonPerfCounter
 - description: Get Monitor Details
   name: Monitor
+- description: Message of the day API
+  name: Motd
 - description: Multi-cluster Management API
   name: Multi-cluster
 - description: NFS-Ganesha Cluster Management API

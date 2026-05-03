@@ -146,11 +146,6 @@ export class NvmeofGatewayGroupComponent implements OnInit {
                 const subsystemsObservable = isRunning
                   ? this.nvmeofService.listSubsystems(group.spec.group).pipe(
                       catchError(() => {
-                        this.notificationService.show(
-                          NotificationType.error,
-                          $localize`Unable to fetch Gateway group`,
-                          $localize`Gateway group does not exist`
-                        );
                         return of([]);
                       })
                     )
@@ -173,11 +168,6 @@ export class NvmeofGatewayGroupComponent implements OnInit {
             );
           }),
           catchError(() => {
-            this.notificationService.show(
-              NotificationType.error,
-              $localize`Unable to fetch Gateway group`,
-              $localize`Gateway group does not exist`
-            );
             return of([]);
           })
         )
@@ -185,7 +175,6 @@ export class NvmeofGatewayGroupComponent implements OnInit {
     );
     this.checkNodesAvailability();
   }
-
   fetchData(): void {
     this.subject.next([]);
     this.checkNodesAvailability();
@@ -239,6 +228,7 @@ export class NvmeofGatewayGroupComponent implements OnInit {
       }
     });
   }
+
   private checkNodesAvailability(): void {
     forkJoin([this.nvmeofService.listGatewayGroups(), this.hostService.getAllHosts()]).subscribe(
       ([groups, hosts]: [GatewayGroup[][], any[]]) => {
@@ -247,6 +237,15 @@ export class NvmeofGatewayGroupComponent implements OnInit {
         groupList.forEach((group: CephServiceSpec) => {
           const placementHosts = group.placement?.hosts || [];
           placementHosts.forEach((hostname: string) => usedHosts.add(hostname));
+
+          const placementLabel = group.placement?.label;
+          if (placementLabel) {
+            (hosts || []).forEach((host) => {
+              if (host.labels?.includes(placementLabel)) {
+                usedHosts.add(host.hostname);
+              }
+            });
+          }
         });
 
         const availableHosts = (hosts || []).filter((host) => {

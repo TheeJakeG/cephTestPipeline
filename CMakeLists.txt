@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 
 project(ceph
-  VERSION 20.0.0
+  VERSION 21.0.0
   LANGUAGES CXX C ASM)
 
 foreach(policy CMP0127 CMP0135
@@ -287,11 +287,6 @@ if(WITH_LIBURING)
   else()
     include(Builduring)
     build_uring()
-  endif()
-  # enable uring in boost::asio
-
-  if(CMAKE_SYSTEM_VERSION VERSION_GREATER_EQUAL "5.10")
-    add_compile_definitions("BOOST_ASIO_HAS_IO_URING")
   endif()
 endif()
 
@@ -806,6 +801,13 @@ else()
     COMPONENTS ${BOOST_COMPONENTS} ${BOOST_HEADER_COMPONENTS})
 endif()
 include_directories(BEFORE SYSTEM ${Boost_INCLUDE_DIRS})
+add_library(Boost::asio INTERFACE IMPORTED)
+if(WITH_LIBURING AND CMAKE_SYSTEM_VERSION VERSION_GREATER_EQUAL "5.10")
+  # enable uring in boost::asio
+  set_target_properties(Boost::asio PROPERTIES
+    INTERFACE_COMPILE_DEFINITIONS "BOOST_ASIO_HAS_IO_URING"
+    INTERFACE_LINK_LIBRARIES "Boost::headers;uring::uring")
+endif()
 
 # dashboard angular2 frontend
 option(WITH_MGR_DASHBOARD_FRONTEND "Build the mgr/dashboard frontend using `npm`" ON)

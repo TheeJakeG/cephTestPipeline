@@ -63,10 +63,12 @@ set(librgw_common_srcs
   rgw_formats.cc
   rgw_http_client.cc
   rgw_keystone.cc
+  rgw_keystone_scope.cc
   rgw_ldap.cc
   rgw_lc.cc
   rgw_lc_s3.cc
   rgw_restore.cc
+  rgw_restore_waiter.cc
   rgw_metadata.cc
   rgw_multi.cc
   rgw_multi_del.cc
@@ -216,6 +218,8 @@ if(WITH_RADOSGW_RADOS)
           driver/rados/rgw_trim_datalog.cc
           driver/rados/rgw_trim_mdlog.cc
           driver/rados/rgw_user.cc
+          driver/rados/oidc.cc
+          driver/rados/oidcs.cc
           driver/rados/role.cc
           driver/rados/roles.cc
           driver/rados/sync_fairness.cc
@@ -311,6 +315,7 @@ target_link_libraries(rgw_common
     ${LUA_LIBRARIES}
     RapidJSON::RapidJSON
     Boost::context
+    Boost::url
     ${FMT_LIB}
     OpenSSL::SSL
     BLAKE3::blake3)
@@ -457,7 +462,7 @@ if(WITH_RADOSGW_AMQP_ENDPOINT)
   find_package(RabbitMQ REQUIRED)
 endif()
 if(WITH_RADOSGW_KAFKA_ENDPOINT)
-  find_package(RDKafka 0.9.2 REQUIRED)
+  find_package(RDKafka 1.1.0 REQUIRED)
 endif()
 
 target_link_libraries(rgw_a

@@ -25,6 +25,8 @@
 #include "test_cxx.h"
 #include "crimson_utils.h"
 
+#include "cls/hello/cls_hello_ops.h"
+
 using namespace std;
 using namespace librados;
 
@@ -1061,7 +1063,7 @@ TEST(LibRadosAio, ExecuteClassPP) {
   ASSERT_TRUE(my_completion2);
   bufferlist in, out;
   ASSERT_EQ(0, test_data.m_ioctx.aio_exec(test_data.m_oid, my_completion2.get(),
-					  "hello", "say_hello", in, &out));
+					  cls::hello::method::say_hello, in, &out));
   {
     TestAlarm alarm;
     ASSERT_EQ(0, my_completion2->wait_for_complete());
@@ -1270,6 +1272,55 @@ TEST(LibRadosAio, OmapPP) {
     EXPECT_EQ(0, my_completion->get_return_value());
     ASSERT_EQ(set_got.size(), (unsigned)0);
     ASSERT_EQ(hdr.length(), 0u);
+  }
+
+  // omap_rm_range removes keys in range
+  {
+    boost::scoped_ptr<AioCompletion> my_completion(cluster.aio_create_completion(0, 0));
+    ObjectWriteOperation op;
+    map<string,bufferlist> to_set;
+    bufferlist bl;
+    bl.append("some data");
+    to_set["aaa"] = bl;
+    to_set["aab"] = bl;
+    to_set["aac"] = bl;
+    to_set["aba"] = bl;
+    to_set["abb"] = bl;
+    to_set["abc"] = bl;
+    op.omap_set(to_set);
+    ioctx.aio_operate("test_obj2", my_completion.get(), &op);
+    {
+      TestAlarm alarm;
+      ASSERT_EQ(0, my_completion->wait_for_complete());
+    }
+    EXPECT_EQ(0, my_completion->get_return_value());
+  }
+  {
+    boost::scoped_ptr<AioCompletion> my_completion(cluster.aio_create_completion(0, 0));
+    ObjectWriteOperation op;
+    op.omap_rm_range("aab", "abb");
+    ioctx.aio_operate("test_obj2", my_completion.get(), &op);
+    {
+      TestAlarm alarm;
+      ASSERT_EQ(0, my_completion->wait_for_complete());
+    }
+    EXPECT_EQ(0, my_completion->get_return_value());
+  }
+  {
+    boost::scoped_ptr<AioCompletion> my_completion(cluster.aio_create_completion(0, 0));
+    ObjectReadOperation op;
+    set<string> set_got;
+    op.omap_get_keys2("", -1, &set_got, nullptr, 0);
+    ioctx.aio_operate("test_obj2", my_completion.get(), &op, 0);
+    {
+      TestAlarm alarm;
+      ASSERT_EQ(0, my_completion->wait_for_complete());
+    }
+    EXPECT_EQ(0, my_completion->get_return_value());
+    ASSERT_EQ(set_got.size(), (unsigned)3);
+    ASSERT_EQ(set_got.count("aaa"), (unsigned)1);
+    ASSERT_EQ(set_got.count("abb"), (unsigned)1);
+    ASSERT_EQ(set_got.count("abc"), (unsigned)1);
   }
 
   ioctx.remove("test_obj");
@@ -2080,7 +2131,7 @@ TEST(LibRadosAioEC, ExecuteClassPP) {
   ASSERT_TRUE(my_completion2);
   bufferlist in, out;
   ASSERT_EQ(0, test_data.m_ioctx.aio_exec(test_data.m_oid, my_completion2.get(),
-					  "hello", "say_hello", in, &out));
+					  cls::hello::method::say_hello, in, &out));
   {
     TestAlarm alarm;
     ASSERT_EQ(0, my_completion2->wait_for_complete());

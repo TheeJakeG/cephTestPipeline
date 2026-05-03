@@ -69,6 +69,7 @@
 #include "rgw_bucket_sync.h"
 #include "rgw_bucket_logging.h"
 #include "rgw_restore.h"
+#include "rgw_restore_waiter.h"
 
 #include "services/svc_zone.h"
 #include "services/svc_quota.h"
@@ -473,6 +474,8 @@ static int read_obj_policy(const DoutPrefixProvider *dpp,
     if (s->auth.identity->is_admin()) {
       return -ENOENT;
     }
+
+    s->env.emplace("s3:prefix", object->get_name());
 
     if (verify_bucket_permission(dpp, s, bucket->get_key(), s->user_acl,
                                  bucket_policy, policy, s->iam_identity_policies,
@@ -994,12 +997,111 @@ void handle_replication_status_header(
  *  `1`  :  restore is already in progress
  *  `2`  :  already restored
  */
+static int wait_for_restore_completion(req_state* s, const DoutPrefixProvider *dpp,
+                                        int64_t timeout_ms,
+                                        std::shared_ptr<rgw::restore::RestoreWaiter> waiter = nullptr,
+                                        std::shared_ptr<rgw::restore::RestoreWaiterRegistry> registry = nullptr,
+                                        optional_yield y = null_yield)
+{
+  if (timeout_ms <= 0 || (!waiter && !registry)) {
+    ldpp_dout(dpp, 5) << "restore is still in progress, please check restore status and retry" << dendl;
+    s->err.message = "restore is still in progress";
+    return -ERR_REQUEST_TIMEOUT;
+  }
+
+  // If waiter not provided, register one now (for RestoreAlreadyInProgress case)
+  std::unique_ptr<rgw::restore::WaiterGuard> guard;
+  if (!waiter) {
+    waiter = registry->register_waiter(
+      s->bucket->get_key(),
+      s->object->get_key()
+    );
+    if (!waiter) {
+      ldpp_dout(dpp, 5) << "restore waiter unavailable, returning timeout" << dendl;
+      s->err.message = "restore is still in progress";
+      return -ERR_REQUEST_TIMEOUT;
+    }
+    guard = std::make_unique<rgw::restore::WaiterGuard>(
+      registry,
+      waiter
+    );
+  }
+
+  const auto start_time = ceph::real_clock::now();
+  constexpr int64_t poll_interval_ms = 200;  // Poll RADOS every 200ms for cross-instance restores
+  int64_t remaining_ms = timeout_ms;
+
+  auto elapsed_ms = [start_time]() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+      ceph::real_clock::now() - start_time).count();
+  };
+
+  while (remaining_ms > 0) {
+    // Try waiting on condition variable for notification
+    const int64_t wait_time_ms = (poll_interval_ms < remaining_ms) ? poll_interval_ms : remaining_ms;
+
+    const bool notified = waiter->wait_for(std::chrono::milliseconds(wait_time_ms), y);
+
+    if (notified) {
+      // Got notification from restore processor
+      if (waiter->failed.load(std::memory_order_acquire)) {
+        const int result = waiter->result.load(std::memory_order_acquire);
+        ldpp_dout(dpp, 0) << "Restore failed after " << elapsed_ms() << "ms (notified)" << dendl;
+        s->err.message = "restore operation failed";
+        return result < 0 ? result : -EIO;
+      }
+      ldpp_dout(dpp, 10) << "Restore completed successfully in " << elapsed_ms() << "ms (notified)" << dendl;
+      return static_cast<int>(rgw::sal::RGWRestoreStatus::CloudRestored);
+    }
+
+    // No notification - poll RADOS to check status (for cross-instance restores)
+    // Invalidate cache to force fresh read from RADOS
+    s->object->invalidate();
+    int ret = s->object->get_obj_attrs(y, dpp);
+    if (ret < 0) {
+      ldpp_dout(dpp, 5) << "Failed to read object attrs during restore wait: " << ret << dendl;
+      // Continue waiting - transient error
+      remaining_ms = timeout_ms - elapsed_ms();
+      continue;
+    }
+
+    const rgw::sal::Attrs& attrs = s->object->get_attrs();
+    auto attr_iter = attrs.find(RGW_ATTR_RESTORE_STATUS);
+    if (attr_iter != attrs.end()) {
+      rgw::sal::RGWRestoreStatus restore_status;
+      auto iter = attr_iter->second.cbegin();
+      decode(restore_status, iter);
+
+      if (restore_status == rgw::sal::RGWRestoreStatus::CloudRestored) {
+        ldpp_dout(dpp, 10) << "Restore completed successfully in " << elapsed_ms() << "ms (polled)" << dendl;
+        return static_cast<int>(rgw::sal::RGWRestoreStatus::CloudRestored);
+      }
+      if (restore_status == rgw::sal::RGWRestoreStatus::RestoreFailed) {
+        ldpp_dout(dpp, 0) << "Restore failed after " << elapsed_ms() << "ms (polled)" << dendl;
+        s->err.message = "restore operation failed";
+        return -EIO;
+      }
+      // else RestoreAlreadyInProgress - continue waiting
+    }
+
+    // Update remaining time based on actual elapsed time
+    remaining_ms = timeout_ms - elapsed_ms();
+  }
+
+  // Timeout reached
+  ldpp_dout(dpp, 5) << "Restore timeout after " << elapsed_ms() << "ms, still in progress" << dendl;
+  s->err.message = "restore is still in progress";
+  return -ERR_REQUEST_TIMEOUT;
+}
+
 int handle_cloudtier_obj(req_state* s, const DoutPrefixProvider *dpp, rgw::sal::Driver* driver,
                          rgw::sal::Attrs& attrs, bool sync_cloudtiered, std::optional<uint64_t> days,
                          bool read_through, optional_yield y)
 {
   int op_ret = 0;
   ldpp_dout(dpp, 20) << "reached handle cloud tier " << dendl;
+  rgw::restore::Restore* restore_handle = driver ? driver->get_rgwrestore() : nullptr;
+  auto waiter_registry = restore_handle ? restore_handle->get_waiter_registry() : nullptr;
   auto attr_iter = attrs.find(RGW_ATTR_MANIFEST);
   if (attr_iter == attrs.end()) {
     if (!read_through) {
@@ -1042,11 +1144,11 @@ int handle_cloudtier_obj(req_state* s, const DoutPrefixProvider *dpp, rgw::sal::
     }
     if (restore_status == rgw::sal::RGWRestoreStatus::RestoreAlreadyInProgress) {
       if (read_through) {
-        op_ret = -ERR_REQUEST_TIMEOUT;
-        ldpp_dout(dpp, 5) << "restore is still in progress, please check restore status and retry" << dendl;
-        s->err.message = "restore is still in progress";
-        return op_ret;
-      } else { 
+        // For glacier tier, fail immediately as restores can take hours/days
+        int64_t timeout_ms = (tier_config.tier_placement.tier_type == "cloud-s3-glacier")
+          ? 0 : s->cct->_conf.get_val<int64_t>("rgw_read_through_timeout_ms");
+        return wait_for_restore_completion(s, dpp, timeout_ms, nullptr, waiter_registry, y);
+      } else {
        	// for restore-op, corresponds to RESTORE_ALREADY_IN_PROGRESS
         return static_cast<int>(rgw::sal::RGWRestoreStatus::RestoreAlreadyInProgress);
       } 
@@ -1098,6 +1200,26 @@ int handle_cloudtier_obj(req_state* s, const DoutPrefixProvider *dpp, rgw::sal::
         }
       }
 
+      // For read-through, register waiter BEFORE initiating restore
+      std::shared_ptr<rgw::restore::RestoreWaiter> waiter;
+      std::unique_ptr<rgw::restore::WaiterGuard> guard;
+
+      if (read_through && waiter_registry) {
+        // For glacier tier, fail immediately as restores can take hours/days
+        int64_t timeout_ms = (tier->get_tier_type() == "cloud-s3-glacier")
+          ? 0 : s->cct->_conf.get_val<int64_t>("rgw_read_through_timeout_ms");
+        if (timeout_ms > 0) {
+          waiter = waiter_registry->register_waiter(
+            s->bucket->get_key(),
+            s->object->get_key()
+          );
+          guard = std::make_unique<rgw::restore::WaiterGuard>(
+            waiter_registry,
+            waiter
+          );
+        }
+      }
+
       op_ret = driver->get_rgwrestore()->restore_obj_from_cloud(s->bucket.get(),
 		      s->object.get(), tier.get(), days, dpp, y);
 
@@ -1108,13 +1230,12 @@ int handle_cloudtier_obj(req_state* s, const DoutPrefixProvider *dpp, rgw::sal::
       }
 
       ldpp_dout(dpp, 20) << "Restore of object " << s->object->get_key() << " initiated" << dendl;
-      /*  Even if restore is complete the first read through request will return
-       *  but actually downloaded object asyncronously.
-       */
-      if (read_through) { //read-through
-        op_ret = -ERR_REQUEST_TIMEOUT;
-        ldpp_dout(dpp, 5) << "restore is still in progress, please check restore status and retry" << dendl;
-        s->err.message = "restore is still in progress";
+
+      if (read_through) {
+        // For glacier tier, fail immediately as restores can take hours/days
+        int64_t timeout_ms = (tier->get_tier_type() == "cloud-s3-glacier")
+          ? 0 : s->cct->_conf.get_val<int64_t>("rgw_read_through_timeout_ms");
+        return wait_for_restore_completion(s, dpp, timeout_ms, waiter, waiter_registry, y);
       }
       return op_ret;
     }
@@ -1173,7 +1294,7 @@ int RGWGetObj::verify_permission(optional_yield y)
 
   if (is_replication_request) {
     // check for s3:GetObject(Version)Acl permission
-    action = s->object->get_instance().empty() ? rgw::IAM::s3GetObjectAcl : rgw::IAM::s3GetObjectVersionAcl;
+    action = s->object_key.instance.empty() ? rgw::IAM::s3GetObjectAcl : rgw::IAM::s3GetObjectVersionAcl;
     if (!verify_object_permission(this, s, action)) {
       s->err.message = fmt::format("missing {} permission", rgw::IAM::action_bit_string(action));
       ldpp_dout(this, 4) << "ERROR: fetching object for replication object=" << s->object << " reason=" << s->err.message << dendl;
@@ -1190,7 +1311,7 @@ int RGWGetObj::verify_permission(optional_yield y)
     }
 
     // fallback to s3:GetObject(Version) permission
-    action = s->object->get_instance().empty() ? rgw::IAM::s3GetObject : rgw::IAM::s3GetObjectVersion;
+    action = s->object_key.instance.empty() ? rgw::IAM::s3GetObject : rgw::IAM::s3GetObjectVersion;
 
     // sse-kms is not supported by s3:GetObject(Version) permission
     bufferlist bl;
@@ -1201,9 +1322,9 @@ int RGWGetObj::verify_permission(optional_yield y)
       return -EACCES;
     }
   } else if (get_torrent) {
-    action = s->object->get_instance().empty() ? rgw::IAM::s3GetObjectTorrent : rgw::IAM::s3GetObjectVersionTorrent;
+    action = s->object_key.instance.empty() ? rgw::IAM::s3GetObjectTorrent : rgw::IAM::s3GetObjectVersionTorrent;
   } else {
-    action = s->object->get_instance().empty() ? rgw::IAM::s3GetObject : rgw::IAM::s3GetObjectVersion;
+    action = s->object_key.instance.empty() ? rgw::IAM::s3GetObject : rgw::IAM::s3GetObjectVersion;
   }
 
   if (!verify_object_permission(this, s, action)) {
@@ -1243,7 +1364,7 @@ int RGWOp::verify_op_mask()
 
 int RGWGetObjTags::verify_permission(optional_yield y)
 {
-  auto iam_action = s->object->get_instance().empty()?
+  auto iam_action = s->object_key.instance.empty() ?
     rgw::IAM::s3GetObjectTagging:
     rgw::IAM::s3GetObjectVersionTagging;
 
@@ -1282,7 +1403,7 @@ void RGWGetObjTags::execute(optional_yield y)
 
 int RGWPutObjTags::verify_permission(optional_yield y)
 {
-  auto iam_action = s->object->get_instance().empty() ?
+  auto iam_action = s->object_key.instance.empty() ?
     rgw::IAM::s3PutObjectTagging:
     rgw::IAM::s3PutObjectVersionTagging;
 
@@ -1343,7 +1464,7 @@ void RGWDeleteObjTags::pre_exec()
 int RGWDeleteObjTags::verify_permission(optional_yield y)
 {
   if (!rgw::sal::Object::empty(s->object.get())) {
-    auto iam_action = s->object->get_instance().empty() ?
+    auto iam_action = s->object_key.instance.empty() ?
       rgw::IAM::s3DeleteObjectTagging:
       rgw::IAM::s3DeleteObjectVersionTagging;
 
@@ -2403,8 +2524,8 @@ int RGWGetObj::get_data_cb(bufferlist& bl, off_t bl_ofs, off_t bl_len)
 }
 
 int RGWGetObj::get_lua_filter(std::unique_ptr<RGWGetObj_Filter>* filter, RGWGetObj_Filter* cb) {
-  std::string script;
-  const auto rc = rgw::lua::read_script(s, s->penv.lua.manager.get(), s->bucket_tenant, s->yield, rgw::lua::context::getData, script);
+  const auto [script, rc] = rgw::lua::read_script_or_bytecode(s, s->penv.lua.manager.get(),
+                                                              s->bucket_tenant, s->yield, rgw::lua::context::getData);
   if (rc == -ENOENT) {
     // no script, nothing to do
     return 0;
@@ -2614,6 +2735,19 @@ void RGWGetObj::execute(optional_yield y)
                        <<". Failing with " << op_ret << dendl;
       goto done_err;
     }
+    // If restore completed (via wait), invalidate cache and reload attrs
+    if (op_ret == static_cast<int>(rgw::sal::RGWRestoreStatus::CloudRestored)) {
+      // Invalidate cached state to force fresh read from RADOS with updated manifest
+      s->object->invalidate();
+
+      op_ret = s->object->get_obj_attrs(y, this);
+      if (op_ret < 0) {
+        ldpp_dout(this, 0) << "ERROR: failed to reload attrs after restore" << dendl;
+        goto done_err;
+      }
+      attrs = s->object->get_attrs();
+      s->obj_size = s->object->get_size();
+    }
   }
 
   attr_iter = attrs.find(RGW_ATTR_USER_MANIFEST);
@@ -2651,10 +2785,6 @@ void RGWGetObj::execute(optional_yield y)
     goto done_err;
   total_len = (ofs <= end ? end + 1 - ofs : 0);
 
-  ofs_x = ofs;
-  end_x = end;
-  filter->fixup_range(ofs_x, end_x);
-
   /* Check whether the object has expired. Swift API documentation
    * stands that we should return 404 Not Found in such case. */
   if (need_object_expiration() && s->object->is_expired()) {
@@ -2672,11 +2802,14 @@ void RGWGetObj::execute(optional_yield y)
                                     attr_iter != attrs.end() ? &(attr_iter->second) : nullptr);
   if (decrypt != nullptr) {
     filter = decrypt.get();
-    filter->fixup_range(ofs_x, end_x);
   }
   if (op_ret < 0) {
     goto done_err;
   }
+
+  ofs_x = ofs;
+  end_x = end;
+  filter->fixup_range(ofs_x, end_x);
 
 
   if (!get_data || ofs > end) {
@@ -4238,7 +4371,7 @@ int RGWPutObj::verify_permission(optional_yield y)
     if (has_s3_existing_tag || has_s3_resource_tag)
       rgw_iam_add_objtags(this, s, cs_object.get(), has_s3_existing_tag, has_s3_resource_tag);
 
-    const auto action = cs_object->get_instance().empty() ?
+    const auto action = copy_source_version_id.empty() ?
         rgw::IAM::s3GetObject :
         rgw::IAM::s3GetObjectVersion;
 
@@ -4415,8 +4548,8 @@ auto RGWPutObj::get_torrent_filter(rgw::sal::DataProcessor* cb)
 }
 
 int RGWPutObj::get_lua_filter(std::unique_ptr<rgw::sal::DataProcessor>* filter, rgw::sal::DataProcessor* cb) {
-  std::string script;
-  const auto rc = rgw::lua::read_script(s, s->penv.lua.manager.get(), s->bucket_tenant, s->yield, rgw::lua::context::putData, script);
+  const auto [script, rc] = rgw::lua::read_script_or_bytecode(s, s->penv.lua.manager.get(),
+                                                              s->bucket_tenant, s->yield, rgw::lua::context::putData);
   if (rc == -ENOENT) {
     // no script, nothing to do
     return 0;
@@ -5561,7 +5694,7 @@ int RGWDeleteObj::verify_permission(optional_yield y)
     rgw_iam_add_objtags(this, s, has_s3_existing_tag, has_s3_resource_tag);
 
   const auto arn = ARN{s->object->get_obj()};
-  const auto action = s->object->get_instance().empty() ?
+  const auto action = s->object_key.instance.empty() ?
       rgw::IAM::s3DeleteObject :
       rgw::IAM::s3DeleteObjectVersion;
 
@@ -5575,7 +5708,7 @@ int RGWDeleteObj::verify_permission(optional_yield y)
   }
 
   if (s->bucket->get_info().mfa_enabled() &&
-      !s->object->get_instance().empty() &&
+      !s->object_key.instance.empty() &&
       !s->mfa_verified) {
     ldpp_dout(this, 5) << "NOTICE: object delete request with a versioned object, mfa auth not provided" << dendl;
     return -ERR_MFA_REQUIRED;
@@ -5662,7 +5795,7 @@ void RGWDeleteObj::execute(optional_yield y)
     // make reservation for notification if needed
     const auto versioned_object = s->bucket->versioning_enabled();
     const auto event_type = versioned_object &&
-      s->object->get_instance().empty() ?
+      s->object_key.instance.empty() ?
       rgw::notify::ObjectRemovedDeleteMarkerCreated :
       rgw::notify::ObjectRemovedDelete;
     std::unique_ptr<rgw::sal::Notification> res
@@ -5814,7 +5947,7 @@ public:
     }
 
     bool src_encrypted = s->src_object->get_attrs().count(RGW_ATTR_CRYPT_MODE);
-    if (need_decompress && !src_encrypted) {
+    if (need_decompress) {
       obj_size = decompress_info.orig_size;
       s->src_object->set_obj_size(obj_size);
       static constexpr bool partial_content = false;
@@ -6047,7 +6180,7 @@ int RGWCopyObj::verify_permission(optional_yield y)
     if (has_s3_existing_tag || has_s3_resource_tag)
       rgw_iam_add_objtags(this, s, s->src_object.get(), has_s3_existing_tag, has_s3_resource_tag);
 
-    const auto action = s->src_object->get_instance().empty() ?
+    const auto action = s->src_object_key.instance.empty() ?
         rgw::IAM::s3GetObject :
         rgw::IAM::s3GetObjectVersion;
 
@@ -6331,7 +6464,7 @@ int RGWGetACLs::verify_permission(optional_yield y)
   bool perm;
   auto [has_s3_existing_tag, has_s3_resource_tag] = rgw_check_policy_condition(this, s);
   if (!rgw::sal::Object::empty(s->object.get())) {
-    auto iam_action = s->object->get_instance().empty() ?
+    auto iam_action = s->object_key.instance.empty() ?
       rgw::IAM::s3GetObjectAcl :
       rgw::IAM::s3GetObjectVersionAcl;
     if (has_s3_existing_tag || has_s3_resource_tag)
@@ -6375,7 +6508,7 @@ int RGWPutACLs::verify_permission(optional_yield y)
 
   rgw_add_grant_to_iam_environment(s->env, s);
   if (!rgw::sal::Object::empty(s->object.get())) {
-    auto iam_action = s->object->get_instance().empty() ? rgw::IAM::s3PutObjectAcl : rgw::IAM::s3PutObjectVersionAcl;
+    auto iam_action = s->object_key.instance.empty() ? rgw::IAM::s3PutObjectAcl : rgw::IAM::s3PutObjectVersionAcl;
     op_ret = rgw_iam_add_objtags(this, s, true, true);
     perm = verify_object_permission(this, s, iam_action);
   } else {
@@ -6420,11 +6553,11 @@ int RGWGetObjAttrs::verify_permission(optional_yield y)
 
   if (! rgw::sal::Object::empty(s->object.get())) {
 
-    auto iam_action1 = s->object->get_instance().empty() ?
+    auto iam_action1 = s->object_key.instance.empty() ?
       rgw::IAM::s3GetObject :
       rgw::IAM::s3GetObjectVersion;
 
-    auto iam_action2 = s->object->get_instance().empty() ?
+    auto iam_action2 = s->object_key.instance.empty() ?
       rgw::IAM::s3GetObjectAttributes :
       rgw::IAM::s3GetObjectVersionAttributes;
 
@@ -6559,8 +6692,12 @@ void RGWPutACLs::execute(optional_yield y)
   if (op_ret < 0)
     return;
 
+  // only allow acl owner to change if the requester views them as equivalent.
+  // the requester may change between their user id and account id.
   if (!existing_owner.empty() &&
-      existing_owner.id != new_policy.get_owner().id) {
+      existing_owner.id != new_policy.get_owner().id &&
+      !(s->auth.identity->is_owner_of(existing_owner.id) &&
+        s->auth.identity->is_owner_of(new_policy.get_owner().id))) {
     s->err.message = "Cannot modify ACL Owner";
     op_ret = -EPERM;
     return;
@@ -7300,17 +7437,26 @@ void RGWCompleteMultipart::execute(optional_yield y)
      from deleting the parts*/
   int max_lock_secs_mp =
     s->cct->_conf.get_val<int64_t>("rgw_mp_lock_max_time");
-  utime_t dur(max_lock_secs_mp, 0);
+  const ceph::timespan dur = std::chrono::seconds(max_lock_secs_mp);
 
-  serializer = meta_obj->get_serializer(this, "RGWCompleteMultipart");
+  serializer = meta_obj->get_serializer(this, y, "RGWCompleteMultipart");
   op_ret = serializer->try_lock(this, dur, y);
-  if (op_ret < 0) {
-    ldpp_dout(this, 0) << "failed to acquire lock" << dendl;
-    if (op_ret == -ENOENT && check_previously_completed(parts)) {
-      ldpp_dout(this, 1) << "NOTICE: This multipart completion is already completed" << dendl;
+  if (op_ret == -ENOENT) {
+    // CompleteMultipartUpload should be idempotent - return success if the
+    // upload already completed. but note that this check isn't reliable in
+    // cases where the upload completed successfully but was later overwritten
+    // or deleted
+    if (check_previously_completed(parts)) {
+      ldpp_dout(this, 4) << "NOTICE: This multipart completion is already completed" << dendl;
       op_ret = 0;
       return;
     }
+    s->err.message = "The specified multipart upload does not exist.";
+    op_ret = -ERR_NO_SUCH_UPLOAD;
+    return;
+  }
+  if (op_ret < 0) {
+    ldpp_dout(this, 0) << "failed to acquire lock" << dendl;
     op_ret = -ERR_INTERNAL_ERROR;
     s->err.message = "This multipart completion is already in progress";
     return;
@@ -7417,6 +7563,13 @@ void RGWCompleteMultipart::execute(optional_yield y)
   // no etag and size before completion
   op_ret = rgw::bucketlogging::log_record(driver, rgw::bucketlogging::LoggingType::Journal, s->object.get(), s, canonical_name(), "", 0, this, y, false, false);
   if (op_ret < 0) {
+    return;
+  }
+
+  if (!serializer->is_locked()) {
+    // lock renewal failed, it's not safe to commit the head object
+    op_ret = -ERR_INTERNAL_ERROR;
+    s->err.message = "This multipart completion is already in progress";
     return;
   }
 
@@ -7584,8 +7737,8 @@ void RGWAbortMultipart::execute(optional_yield y)
 
   int max_lock_secs_mp =
     s->cct->_conf.get_val<int64_t>("rgw_mp_lock_max_time");
-  utime_t dur(max_lock_secs_mp, 0);
-  auto serializer = meta_obj->get_serializer(this, "RGWCompleteMultipart");
+  const ceph::timespan dur = std::chrono::seconds(max_lock_secs_mp);
+  auto serializer = meta_obj->get_serializer(this, y, "RGWCompleteMultipart");
   op_ret = serializer->try_lock(this, dur, y);
   if (op_ret < 0) {
     if (op_ret == -ENOENT) {
@@ -7834,7 +7987,7 @@ void RGWDeleteMultiObj::handle_individual_object(const RGWMultiDelObject& object
 
   // make reservation for notification if needed
   const auto versioned_object = s->bucket->versioning_enabled();
-  const auto event_type = versioned_object && obj->get_instance().empty() ?
+  const auto event_type = versioned_object && o.instance.empty() ?
                           rgw::notify::ObjectRemovedDeleteMarkerCreated :
                           rgw::notify::ObjectRemovedDelete;
   std::unique_ptr<rgw::sal::Notification> res
@@ -8709,7 +8862,7 @@ int RGWGetAttrs::verify_permission(optional_yield y)
     if (has_s3_existing_tag || has_s3_resource_tag)
       rgw_iam_add_objtags(this, s, has_s3_existing_tag, has_s3_resource_tag);
 
-  auto iam_action = s->object->get_instance().empty() ?
+  auto iam_action = s->object_key.instance.empty() ?
     rgw::IAM::s3GetObject :
     rgw::IAM::s3GetObjectVersion;
 

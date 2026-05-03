@@ -611,7 +611,20 @@ namespace rgw::sal {
     return 0;
   }
 
+  int MPDBSerializer::try_lock(const DoutPrefixProvider *dpp, ceph::timespan dur, optional_yield y)
+  {
+    locked = true;
+    return 0;
+  }
+
+  int MPDBSerializer::unlock(const DoutPrefixProvider* dpp, optional_yield y)
+  {
+    clear_locked();
+    return 0;
+  }
+
   std::unique_ptr<MPSerializer> DBObject::get_serializer(const DoutPrefixProvider *dpp,
+							 optional_yield y,
 							 const std::string& lock_name)
   {
     return std::make_unique<MPDBSerializer>(dpp, store, this, lock_name);
@@ -1471,7 +1484,8 @@ namespace rgw::sal {
   int DBStore::store_oidc_provider(const DoutPrefixProvider *dpp,
                                    optional_yield y,
                                    const RGWOIDCProviderInfo& info,
-                                   bool exclusive)
+                                   bool exclusive,
+                                   RGWObjVersionTracker* objv_tracker)
   {
     return -ENOTSUP;
   }
@@ -1480,7 +1494,8 @@ namespace rgw::sal {
                                   optional_yield y,
                                   std::string_view account,
                                   std::string_view url,
-                                  RGWOIDCProviderInfo& info)
+                                  RGWOIDCProviderInfo& info,
+                                  RGWObjVersionTracker* objv_tracker)
   {
     return -ENOTSUP;
   }
@@ -2134,6 +2149,12 @@ namespace rgw::sal {
     return -ENOENT;
   }
 
+  std::tuple<rgw::lua::LuaCodeType, int> DBLuaManager::get_script_or_bytecode(const DoutPrefixProvider* dpp, optional_yield y,
+                                                                    const std::string& key)
+  {
+    return std::make_tuple("", -ENOENT);
+  }
+
   int DBLuaManager::put_script(const DoutPrefixProvider* dpp, optional_yield y, const std::string& key, const std::string& script)
   {
     return -ENOENT;
@@ -2163,7 +2184,7 @@ namespace rgw::sal {
   {
     return -ENOENT;
   }
-  
+
 } // namespace rgw::sal
 
 extern "C" {

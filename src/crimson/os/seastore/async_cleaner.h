@@ -18,7 +18,6 @@
 #include "crimson/os/seastore/transaction.h"
 #include "crimson/os/seastore/transaction_interruptor.h"
 #include "crimson/os/seastore/segment_seq_allocator.h"
-#include "crimson/os/seastore/backref_mapping.h"
 
 namespace crimson::os::seastore {
 
@@ -537,6 +536,7 @@ public:
   };
 
   JournalTrimmerImpl(
+    store_index_t store_index,
     BackrefManager &backref_manager,
     config_t config,
     backend_type_t type,
@@ -625,6 +625,7 @@ public:
   seastar::future<> trim();
 
   static JournalTrimmerImplRef create(
+      store_index_t store_index,
       BackrefManager &backref_manager,
       config_t config,
       backend_type_t type,
@@ -632,6 +633,7 @@ public:
       device_off_t roll_size,
       bool tail_include_alloc) {
     return std::make_unique<JournalTrimmerImpl>(
+        store_index,
         backref_manager, config, type, roll_start,
         roll_size, tail_include_alloc);
   }
@@ -693,7 +695,7 @@ private:
     return std::min(get_max_dirty_bytes_to_trim(),
 		    config.rewrite_dirty_bytes_per_cycle);
   }
-  void register_metrics();
+  void register_metrics(store_index_t store_index);
 
   ExtentCallbackInterface *extent_callback = nullptr;
   BackgroundListener *background_callback = nullptr;
@@ -1304,6 +1306,7 @@ public:
   };
 
   SegmentCleaner(
+    store_index_t store_index,
     config_t config,
     SegmentManagerGroupRef&& sm_group,
     BackrefManager &backref_manager,
@@ -1317,6 +1320,7 @@ public:
   }
 
   static SegmentCleanerRef create(
+      store_index_t store_index,
       config_t config,
       SegmentManagerGroupRef&& sm_group,
       BackrefManager &backref_manager,
@@ -1324,7 +1328,7 @@ public:
       rewrite_gen_t max_rewrite_generation,
       bool detailed,
       bool is_cold = false) {
-    return std::make_unique<SegmentCleaner>(
+    return std::make_unique<SegmentCleaner>(store_index,
         config, std::move(sm_group), backref_manager,
         ool_seq_allocator, max_rewrite_generation,
 	detailed, is_cold);
@@ -1536,14 +1540,6 @@ private:
   };
   std::optional<reclaim_state_t> reclaim_state;
 
-  using do_reclaim_space_ertr = base_ertr;
-  using do_reclaim_space_ret = do_reclaim_space_ertr::future<>;
-  do_reclaim_space_ret do_reclaim_space(
-    const std::vector<CachedExtentRef> &backref_extents,
-    const backref_mapping_list_t &pin_list,
-    std::size_t &reclaimed,
-    std::size_t &runs);
-
   /*
    * Segments calculations
    */
@@ -1643,6 +1639,7 @@ private:
     }
   }
 
+  store_index_t store_index;
   const bool detailed;
   const bool is_cold;
   const config_t config;
@@ -1710,17 +1707,20 @@ using RBMCleanerRef = std::unique_ptr<RBMCleaner>;
 class RBMCleaner : public AsyncCleaner {
 public:
   RBMCleaner(
+    store_index_t store_index,
     RBMDeviceGroupRef&& rb_group,
     BackrefManager &backref_manager,
     LBAManager &lba_manager,
     bool detailed);
 
   static RBMCleanerRef create(
+      store_index_t store_index,
       RBMDeviceGroupRef&& rb_group,
       BackrefManager &backref_manager,
       LBAManager &lba_manager,
       bool detailed) {
     return std::make_unique<RBMCleaner>(
+      store_index,
       std::move(rb_group), backref_manager, lba_manager, detailed);
   }
 
@@ -1861,6 +1861,7 @@ public:
 private:
   bool equals(const RBMSpaceTracker &other) const;
 
+  store_index_t store_index;
   const bool detailed;
   RBMDeviceGroupRef rb_group;
   BackrefManager &backref_manager;

@@ -1,175 +1,125 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { HttpClientTestingModule } from '@angular/common/http/testing';
 
 import { OverviewStorageCardComponent } from './overview-storage-card.component';
-import { PrometheusService } from '~/app/shared/api/prometheus.service';
 import { FormatterService } from '~/app/shared/services/formatter.service';
 
-describe('OverviewStorageCardComponent (Jest)', () => {
+describe('OverviewStorageCardComponent', () => {
   let component: OverviewStorageCardComponent;
   let fixture: ComponentFixture<OverviewStorageCardComponent>;
-
-  let mockPrometheusService: {
-    getPrometheusQueryData: jest.Mock;
-  };
 
   let mockFormatterService: {
     formatToBinary: jest.Mock;
     convertToUnit: jest.Mock;
   };
 
-  const mockPrometheusResponse = {
-    result: [
-      {
-        metric: { application: 'Block' },
-        value: [0, '1024']
-      },
-      {
-        metric: { application: 'Filesystem' },
-        value: [0, '2048']
-      },
-      {
-        metric: { application: 'Object' },
-        value: [0, '0'] // should be filtered
-      }
-    ]
-  };
-
   beforeEach(async () => {
-    mockPrometheusService = {
-      getPrometheusQueryData: jest.fn().mockReturnValue(of(mockPrometheusResponse))
-    };
-
     mockFormatterService = {
-      formatToBinary: jest.fn().mockReturnValue([10, 'GiB']),
-      convertToUnit: jest.fn((value: number) => Number(value))
+      formatToBinary: jest.fn((value: number) => {
+        if (value === 1024) return [20, 'TiB'];
+        if (value === 512) return [5, 'TiB'];
+        if (value === 256) return [5, 'MiB'];
+        return [10, 'GiB'];
+      }),
+      convertToUnit: jest.fn((value: number, fromUnit: string, toUnit: string) => {
+        if (value === 20 && fromUnit === 'TiB' && toUnit === 'TiB') return 20;
+        if (value === 20 && fromUnit === 'TiB' && toUnit === 'MiB') return 20;
+        return value;
+      })
     };
 
     await TestBed.configureTestingModule({
-      imports: [OverviewStorageCardComponent],
-      providers: [
-        { provide: PrometheusService, useValue: mockPrometheusService },
-        { provide: FormatterService, useValue: mockFormatterService }
-      ]
+      imports: [OverviewStorageCardComponent, HttpClientTestingModule],
+      providers: [{ provide: FormatterService, useValue: mockFormatterService }]
     }).compileComponents();
 
     fixture = TestBed.createComponent(OverviewStorageCardComponent);
     component = fixture.componentInstance;
-    fixture.detectChanges(); // triggers ngOnInit
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
-
-  // --------------------------------------------------
-  // CREATION
-  // --------------------------------------------------
 
   it('should create', () => {
     expect(component).toBeTruthy();
   });
 
-  // --------------------------------------------------
-  // TOTAL setter (truthy)
-  // --------------------------------------------------
+  it('should set totalCapacity when valid value is provided', () => {
+    component.totalCapacity = 1024;
 
-  it('should set total when valid value provided', () => {
-    component.total = 1024;
-
-    expect(component.totalRaw).toBe(10);
-    expect(component.totalRawUnit).toBe('GiB');
+    expect(component.totalRaw).toBe(20);
+    expect(component.totalRawUnit).toBe('TiB');
+    expect(mockFormatterService.formatToBinary).toHaveBeenCalledWith(1024, true);
   });
 
-  // --------------------------------------------------
-  // TOTAL setter (falsy)
-  // --------------------------------------------------
-
-  it('should not set total when formatter returns NaN', () => {
+  it('should not set totalCapacity when formatter returns NaN', () => {
     mockFormatterService.formatToBinary.mockReturnValue([NaN, 'GiB']);
 
-    component.total = 0;
+    component.totalCapacity = 1024;
 
-    expect(component.totalRaw).toBeUndefined();
+    expect(component.totalRaw).toBeNull();
+    expect(component.totalRawUnit).toBe('');
   });
 
-  // --------------------------------------------------
-  // USED setter
-  // --------------------------------------------------
+  it('should set usedCapacity when valid value is provided', () => {
+    component.usedCapacity = 512;
 
-  it('should set used correctly', () => {
-    component.used = 2048;
-
-    expect(component.usedRaw).toBe(10);
-    expect(component.usedRawUnit).toBe('GiB');
-  });
-  // --------------------------------------------------
-  // ngOnInit data load
-  // --------------------------------------------------
-
-  it('should load and filter data on init', () => {
-    expect(mockPrometheusService.getPrometheusQueryData).toHaveBeenCalled();
-    expect(component.allData.length).toBe(2); // Object filtered (0 value)
+    expect(component.usedRaw).toBe(5);
+    expect(component.usedRawUnit).toBe('TiB');
+    expect(mockFormatterService.formatToBinary).toHaveBeenCalledWith(512, true);
   });
 
-  // --------------------------------------------------
-  // FILTERING
-  // --------------------------------------------------
+  it('should not set usedCapacity when formatter returns NaN', () => {
+    mockFormatterService.formatToBinary.mockReturnValue([NaN, 'GiB']);
 
-  it('should filter displayData for selected storage type', () => {
-    component.allData = [
-      { group: 'Block', value: 10 },
-      { group: 'Filesystem', value: 20 }
-    ];
+    component.usedCapacity = 512;
 
-    component.onStorageTypeSelect({ item: { content: 'Block', selected: true } } as any);
-
-    expect(component.displayData).toEqual([{ group: 'Block', value: 10 }]);
+    expect(component.usedRaw).toBeNull();
+    expect(component.usedRawUnit).toBe('');
   });
 
-  it('should show all data when ALL selected', () => {
-    component.allData = [
-      { group: 'Block', value: 10 },
-      { group: 'Filesystem', value: 20 }
-    ];
+  it('should not update chart options until both totalCapacity and usedCapacity are set', () => {
+    component.totalCapacity = 1024;
 
-    component.onStorageTypeSelect({ item: { content: 'All', selected: true } } as any);
-
-    expect(component.displayData.length).toBe(2);
+    expect(component.options.meter.proportional.total).toBeNull();
+    expect(component.options.meter.proportional.unit).toBe('');
+    expect(component.options.tooltip).toBeUndefined();
   });
 
-  // --------------------------------------------------
-  // DROPDOWN
-  // --------------------------------------------------
+  it('should update chart options when both totalCapacity and usedCapacity are set', () => {
+    component.totalCapacity = 1024;
+    component.usedCapacity = 512;
 
-  it('should update storage type from dropdown selection', () => {
-    component.onStorageTypeSelect({
-      item: { content: 'Block', selected: true }
+    expect(mockFormatterService.convertToUnit).toHaveBeenCalledWith(20, 'TiB', 'TiB', 1);
+    expect(component.options.meter.proportional.total).toBe(20);
+    expect(component.options.meter.proportional.unit).toBe('TiB');
+    expect(component.options.tooltip).toBeDefined();
+    expect(typeof component.options.tooltip?.valueFormatter).toBe('function');
+  });
+
+  it('should use used unit in tooltip formatter', () => {
+    mockFormatterService.formatToBinary.mockImplementation((value: number) => {
+      if (value === 1024) return [20, 'TiB'];
+      if (value === 512) return [5, 'MiB'];
+      return [10, 'GiB'];
     });
 
-    expect(component.selectedStorageType).toBe('Block');
+    component.totalCapacity = 1024;
+    component.usedCapacity = 512;
+
+    const formatter = component.options.tooltip?.valueFormatter as (value: number) => string;
+
+    expect(component.usedRawUnit).toBe('MiB');
+    expect(component.options.meter.proportional.unit).toBe('MiB');
+    expect(formatter(12.3)).toBe('12.3 MiB');
   });
 
-  it('should auto-select single item if only one exists', () => {
-    component.allData = [{ group: 'Block', value: 10 }];
-
-    (component as any)._setDropdownItemsAndStorageType();
-
-    expect(component.selectedStorageType).toBe('All');
-    expect(component.dropdownItems.length).toBe(2);
-  });
-
-  // --------------------------------------------------
-  // DESTROY
-  // --------------------------------------------------
-
-  it('should clean up on destroy', () => {
-    const nextSpy = jest.spyOn((component as any).destroy$, 'next');
-    const completeSpy = jest.spyOn((component as any).destroy$, 'complete');
-
-    component.ngOnDestroy();
-
-    expect(nextSpy).toHaveBeenCalled();
-    expect(completeSpy).toHaveBeenCalled();
+  it('should keep default input values for presentational fields', () => {
+    expect(component.consumptionTrendData).toEqual([]);
+    expect(component.averageDailyConsumption).toBe('');
+    expect(component.estimatedTimeUntilFull).toBe('');
+    expect(component.breakdownData).toEqual([]);
+    expect(component.isBreakdownLoaded).toBe(false);
   });
 });

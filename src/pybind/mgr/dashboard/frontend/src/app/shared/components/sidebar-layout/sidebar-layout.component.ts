@@ -3,6 +3,7 @@ import { Component, Input, ViewEncapsulation } from '@angular/core';
 export interface SidebarItem {
   label: string;
   route: string[];
+  routeExtras?: any;
   routerLinkActiveOptions?: { exact: boolean };
 }
 
@@ -11,10 +12,7 @@ export interface SidebarItem {
   templateUrl: './sidebar-layout.component.html',
   styleUrls: ['./sidebar-layout.component.scss'],
   encapsulation: ViewEncapsulation.None,
-  standalone: false,
-  host: {
-    class: 'tearsheet--full'
-  }
+  standalone: false
 })
 export class SidebarLayoutComponent {
   @Input() title!: string;

@@ -46,7 +46,7 @@ CRUSH Location
 The location of an OSD within the CRUSH map's hierarchy is referred to as its
 ``CRUSH location``. The specification of a CRUSH location takes the form of a
 list of key-value pairs. For example, if an OSD is in a particular row, rack,
-chassis, and host, and is also part of the 'default' CRUSH root (which is the
+chassis, and host, and is also part of the `default` CRUSH root (which is the
 case for most clusters), its CRUSH location can be specified as follows::
 
   root=default row=a rack=a2 chassis=a2a host=a2a1
@@ -76,7 +76,7 @@ section::
 Note that this action is unnecessary in most cases.
 
 If the ``crush_location`` is not set explicitly,
-a default of ``root=default host=HOSTNAME`` is used for ``OSD``s,
+a default of ``root=default host=HOSTNAME`` is used for OSDs,
 where the hostname is determined by the output of the ``hostname -s`` command.
 
 .. note:: If you switch from this default to an explicitly set ``crush_location``,
@@ -655,7 +655,7 @@ It is possible to create a rule that restricts data placement to a specific
 *class* of device. By default, Ceph OSDs automatically classify themselves as
 either ``hdd`` or ``ssd`` in accordance with the underlying type of device
 being used. These device classes can be customized. One might set the ``device
-class`` of OSDs to ``nvme`` to distinguish the from SATA SSDs, or one might set
+class`` of OSDs to ``nvme`` to distinguish them from SATA SSDs, or one might set
 them to something arbitrary like ``ssd-testing`` or ``ssd-ethel`` so that rules
 and pools may be flexibly constrained to use (or avoid using) specific subsets
 of OSDs based on specific requirements. 
@@ -766,10 +766,10 @@ instead of a normal CRUSH rule.  Normal crush rules cannot retry prior
 steps when an out OSD is encountered and rely on CHOOSELEAF steps to
 permit moving OSDs to new hosts.  However, CHOOSELEAF rules don't
 support more than a single OSD per failure domain.  MSR rules, new in
-squid, support multiple OSDs per failure domain by retrying all prior
+Squid, support multiple OSDs per failure domain by retrying all prior
 steps when an out OSD is encountered.  Using MSR rules requires that
-OSDs and clients be required to support the CRUSH_MSR feature bit
-(squid or newer).
+OSDs and clients are required to support the CRUSH_MSR feature bit
+(Squid or newer).
 
 
 Deleting rules
@@ -821,7 +821,7 @@ The ``bobtail`` tunable profile provides the following improvements:
 
  * For large clusters, a small percentage of PGs might map to fewer than the
    desired number of OSDs. This is known to happen when there are multiple
-   hierarchy layers in use (for example,, ``row``, ``rack``, ``host``,
+   hierarchy layers in use (for example, ``row``, ``rack``, ``host``,
    ``osd``).
 
  * When one or more OSDs are marked ``out``, data tends to be redistributed

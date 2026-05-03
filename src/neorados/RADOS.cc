@@ -74,26 +74,31 @@ namespace neorados {
 
 Object::Object() {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t();
 }
 
 Object::Object(const char* s) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(s);
 }
 
 Object::Object(std::string_view s) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(s);
 }
 
 Object::Object(std::string&& s) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(std::move(s));
 }
 
 Object::Object(const std::string& s) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(s);
 }
 
@@ -103,6 +108,7 @@ Object::~Object() {
 
 Object::Object(const Object& o) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(*reinterpret_cast<const object_t*>(&o.impl));
 }
 Object& Object::operator =(const Object& o) {
@@ -112,6 +118,7 @@ Object& Object::operator =(const Object& o) {
 }
 Object::Object(Object&& o) {
   static_assert(impl_size >= sizeof(object_t));
+  static_assert(alignof(decltype(impl)) >= alignof(object_t));
   new (&impl) object_t(std::move(*reinterpret_cast<object_t*>(&o.impl)));
 }
 Object& Object::operator =(Object&& o) {
@@ -165,6 +172,7 @@ struct IOContextImpl {
 
 IOContext::IOContext() {
   static_assert(impl_size >= sizeof(IOContextImpl));
+  static_assert(alignof(decltype(impl)) >= alignof(IOContextImpl));
   new (&impl) IOContextImpl();
 }
 
@@ -185,6 +193,7 @@ IOContext::~IOContext() {
 
 IOContext::IOContext(const IOContext& rhs) {
   static_assert(impl_size >= sizeof(IOContextImpl));
+  static_assert(alignof(decltype(impl)) >= alignof(IOContextImpl));
   new (&impl) IOContextImpl(*reinterpret_cast<const IOContextImpl*>(&rhs.impl));
 }
 
@@ -196,6 +205,7 @@ IOContext& IOContext::operator =(const IOContext& rhs) {
 
 IOContext::IOContext(IOContext&& rhs) {
   static_assert(impl_size >= sizeof(IOContextImpl));
+  static_assert(alignof(decltype(impl)) >= alignof(IOContextImpl));
   new (&impl) IOContextImpl(
     std::move(*reinterpret_cast<IOContextImpl*>(&rhs.impl)));
 }
@@ -414,6 +424,7 @@ struct OpImpl {
 
 Op::Op() {
   static_assert(Op::impl_size >= sizeof(OpImpl));
+  static_assert(alignof(decltype(impl)) >= alignof(OpImpl));
   new (&impl) OpImpl;
 }
 
@@ -492,29 +503,26 @@ void Op::cmp_omap(const std::vector<cmp_assertion>& assertions) {
   reinterpret_cast<OpImpl*>(&impl)->op.omap_cmp(std::move(bl), nullptr);
 }
 
-void Op::exec(std::string_view cls, std::string_view method,
-	      const bufferlist& inbl,
-	      cb::list* out,
-	      bs::error_code* ec) {
+void Op::exec_impl(std::string_view cls, std::string_view method,
+              const bufferlist& inbl,
+              cb::list* out,
+              bs::error_code* ec) {
   reinterpret_cast<OpImpl*>(&impl)->op.call(cls, method, inbl, ec, out);
 }
-
-void Op::exec(std::string_view cls, std::string_view method,
-	      const bufferlist& inbl,
-	      fu2::unique_function<void(bs::error_code,
-					const cb::list&) &&> f) {
+void Op::exec_impl(std::string_view cls, std::string_view method,
+              const bufferlist& inbl,
+              fu2::unique_function<void(bs::error_code,
+                                        const cb::list&) &&> f) {
   reinterpret_cast<OpImpl*>(&impl)->op.call(cls, method, inbl, std::move(f));
 }
-
-void Op::exec(std::string_view cls, std::string_view method,
-	      const bufferlist& inbl,
-	      fu2::unique_function<void(bs::error_code, int,
-					const cb::list&) &&> f) {
+void Op::exec_impl(std::string_view cls, std::string_view method,
+              const bufferlist& inbl,
+              fu2::unique_function<void(bs::error_code, int,
+                                        const cb::list&) &&> f) {
   reinterpret_cast<OpImpl*>(&impl)->op.call(cls, method, inbl, std::move(f));
 }
-
-void Op::exec(std::string_view cls, std::string_view method,
-	      const bufferlist& inbl, bs::error_code* ec) {
+void Op::exec_impl(std::string_view cls, std::string_view method,
+              const bufferlist& inbl, bs::error_code* ec) {
   reinterpret_cast<OpImpl*>(&impl)->op.call(cls, method, inbl, ec);
 }
 
@@ -840,7 +848,11 @@ void RADOS::Builder::build_(asio::io_context& ioctx,
   if (no_mon_conf)
     flags |= CINIT_FLAG_NO_MON_CONFIG;
 
-  CephContext *cct = common_preinit(ci, env, flags);
+  boost::intrusive_ptr<CephContext> cct
+  {
+    common_preinit(ci, env, flags),
+    false //< So the intrusive_ptr adopts the reference we already have
+  };
   if (cluster)
     cct->_conf->cluster = *cluster;
 
@@ -876,7 +888,7 @@ void RADOS::Builder::build_(asio::io_context& ioctx,
   }
 
   if (!no_mon_conf) {
-    MonClient mc_bootstrap(cct, ioctx);
+    MonClient mc_bootstrap(cct.get(), ioctx);
     // TODO This function should return an error code.
     auto err = mc_bootstrap.get_monmap_and_config();
     if (err < 0) {
@@ -889,22 +901,22 @@ void RADOS::Builder::build_(asio::io_context& ioctx,
   if (!cct->_log->is_started()) {
     cct->_log->start();
   }
-  common_init_finish(cct);
+  common_init_finish(cct.get());
 
-  RADOS::make_with_cct(cct, ioctx, std::move(c));
+  RADOS::make_with_cct(std::move(cct), ioctx, std::move(c));
 }
 
-void RADOS::make_with_cct_(CephContext* cct,
+void RADOS::make_with_cct_(boost::intrusive_ptr<CephContext> cct,
 			   asio::io_context& ioctx,
 			   BuildComp c) {
   try {
     auto r = std::make_shared<detail::NeoClient>(
-      std::make_unique<detail::RADOS>(ioctx, cct));
-    r->objecter->wait_for_osd_map(
-      [c = std::move(c), r = std::move(r)]() mutable {
-	asio::dispatch(asio::append(std::move(c), bs::error_code{},
-				    RADOS{std::move(r)}));
-      });
+      std::make_unique<detail::RADOS>(ioctx, std::move(cct)));
+    r->objecter->wait_for_osd_map([c = std::move(c),
+                                   r = std::move(r)]() mutable {
+      asio::dispatch(
+          asio::append(std::move(c), bs::error_code{}, RADOS{std::move(r)}));
+    });
   } catch (const bs::system_error& err) {
     asio::post(ioctx.get_executor(),
 	       asio::append(std::move(c), err.code(), RADOS{nullptr}));
@@ -1756,16 +1768,19 @@ void RADOS::notify_(Object o, IOContext _ioc, bufferlist bl,
 
 Cursor::Cursor() {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   new (&impl) hobject_t();
 };
 
 Cursor::Cursor(end_magic_t) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   new (&impl) hobject_t(hobject_t::get_max());
 }
 
 Cursor::Cursor(void* p) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   new (&impl) hobject_t(std::move(*reinterpret_cast<hobject_t*>(p)));
 }
 
@@ -1781,11 +1796,13 @@ Cursor Cursor::end() {
 
 Cursor::Cursor(const Cursor& rhs) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   new (&impl) hobject_t(*reinterpret_cast<const hobject_t*>(&rhs.impl));
 }
 
 Cursor& Cursor::operator =(const Cursor& rhs) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   reinterpret_cast<hobject_t*>(&impl)->~hobject_t();
   new (&impl) hobject_t(*reinterpret_cast<const hobject_t*>(&rhs.impl));
   return *this;
@@ -1793,11 +1810,13 @@ Cursor& Cursor::operator =(const Cursor& rhs) {
 
 Cursor::Cursor(Cursor&& rhs) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   new (&impl) hobject_t(std::move(*reinterpret_cast<hobject_t*>(&rhs.impl)));
 }
 
 Cursor& Cursor::operator =(Cursor&& rhs) {
   static_assert(impl_size >= sizeof(hobject_t));
+  static_assert(alignof(decltype(impl)) >= alignof(hobject_t));
   reinterpret_cast<hobject_t*>(&impl)->~hobject_t();
   new (&impl) hobject_t(std::move(*reinterpret_cast<hobject_t*>(&rhs.impl)));
   return *this;

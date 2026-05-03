@@ -11,7 +11,7 @@ import { CdFormGroup } from '~/app/shared/forms/cd-form-group';
 import { SharedModule } from '~/app/shared/shared.module';
 import { NvmeofSubsystemsStepThreeComponent } from './nvmeof-subsystem-step-3.component';
 import { NvmeofService } from '~/app/shared/api/nvmeof.service';
-import { GridModule, RadioModule, TagModule } from 'carbon-components-angular';
+import { GridModule, InputModule, RadioModule, TagModule } from 'carbon-components-angular';
 import { AUTHENTICATION } from '~/app/shared/models/nvmeof';
 
 describe('NvmeofSubsystemsStepThreeComponent', () => {
@@ -34,6 +34,7 @@ describe('NvmeofSubsystemsStepThreeComponent', () => {
         GridModule,
         RadioModule,
         TagModule,
+        InputModule,
         ToastrModule.forRoot()
       ]
     }).compileComponents();
@@ -56,10 +57,51 @@ describe('NvmeofSubsystemsStepThreeComponent', () => {
     });
 
     describe('form initialization', () => {
+      beforeEach(() => {
+        fixture = TestBed.createComponent(NvmeofSubsystemsStepThreeComponent);
+        component = fixture.componentInstance;
+
+        component.stepTwoValue = {
+          hostType: 'specific',
+          addedHosts: ['nqn.2001-07.com.ceph:1776805137618']
+        } as any;
+
+        fixture.detectChanges();
+        form = component.formGroup;
+      });
+
       it('should initialize form with default values', () => {
         expect(form).toBeTruthy();
         expect(form.get('authType')?.value).toBe(AUTHENTICATION.Unidirectional);
         expect(form.get('subsystemDchapKey')?.value).toBe(null);
+      });
+
+      it('should keep host key optional in unidirectional mode', () => {
+        const hostKeyCtrl = (form.get('hostDchapKeyList') as any).at(0).get('dhchap_key');
+        hostKeyCtrl.setValue('');
+        hostKeyCtrl.markAsTouched();
+        hostKeyCtrl.updateValueAndValidity();
+
+        expect(hostKeyCtrl.hasError('required')).toBeFalsy();
+      });
+
+      it('should require host key in bidirectional mode', () => {
+        form.get('authType')?.setValue(AUTHENTICATION.Bidirectional);
+        const hostKeyCtrl = (form.get('hostDchapKeyList') as any).at(0).get('dhchap_key');
+        hostKeyCtrl.setValue('');
+        hostKeyCtrl.markAsTouched();
+        hostKeyCtrl.updateValueAndValidity();
+
+        expect(hostKeyCtrl.hasError('required')).toBeTruthy();
+      });
+
+      it('should validate host key base64 format when provided', () => {
+        const hostKeyCtrl = (form.get('hostDchapKeyList') as any).at(0).get('dhchap_key');
+        hostKeyCtrl.setValue('not-valid-key');
+        hostKeyCtrl.markAsTouched();
+        hostKeyCtrl.updateValueAndValidity();
+
+        expect(hostKeyCtrl.hasError('invalidBase64')).toBeTruthy();
       });
     });
   });

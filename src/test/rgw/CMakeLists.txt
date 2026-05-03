@@ -322,6 +322,13 @@ target_include_directories(unittest_rgw_url
   SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src/rgw")
 target_link_libraries(unittest_rgw_url ${rgw_libs})
 
+# unittest_rgw_sync_trace
+add_executable(unittest_rgw_sync_trace test_rgw_sync_trace.cc)
+add_ceph_unittest(unittest_rgw_sync_trace)
+target_include_directories(unittest_rgw_sync_trace
+  SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src/rgw")
+target_link_libraries(unittest_rgw_sync_trace)
+
 if(WITH_RADOSGW_RADOS)
 add_executable(ceph_test_rgw_gc_log test_rgw_gc_log.cc $<TARGET_OBJECTS:unit-main>)
 target_include_directories(ceph_test_rgw_gc_log
@@ -438,3 +445,7 @@ add_catch2_test_rgw(rgw_hex)
 add_executable(unittest_rgw_async_utils test_rgw_async_utils.cc)
 add_ceph_unittest(unittest_rgw_async_utils)
 target_link_libraries(unittest_rgw_async_utils ${rgw_libs} ${UNITTEST_LIBS})
+
+add_executable(unittest_rgw_tag test_rgw_tag.cc)
+add_ceph_unittest(unittest_rgw_tag)
+target_link_libraries(unittest_rgw_tag ${rgw_libs} ${UNITTEST_LIBS})

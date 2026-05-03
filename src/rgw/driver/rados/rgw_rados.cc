@@ -972,12 +972,14 @@ void RGWIndexCompletionManager::process()
       }
 
       if (c->log_op) {
-        // This null_yield can stay, for now, since we're in our own thread
-        r = add_datalog_entry(&dpp, store->svc.datalog_rados, bucket_info,
-			      bs.shard_id, null_yield);
-	ldpp_dout(&dpp, 0) << "ERROR: " << __func__ << "(): write to datalog failed, obj=" << c->obj << " r=" << r << dendl;
-
-        /* ignoring error, can't do anything about it */
+        /* this null_yield can stay for now since we're in our own
+         * thread */
+        std::ignore = add_datalog_entry(&dpp, store->svc.datalog_rados,
+                                        bucket_info, bs.shard_id,
+                                        null_yield);
+        /* if there is an error we can ignore it, as a) there's
+         * nothing we can do and b) it's already logged in
+         * add_datalog_entry */
       }
     }
   }
@@ -1125,6 +1127,11 @@ void RGWRados::finalize()
   }
   delete sync_tracer;
   
+  if (use_restore_thread) {
+    restore->stop_processor();
+  }
+  restore = NULL;
+
   delete lc;
   lc = NULL; 
 
@@ -1166,10 +1173,6 @@ void RGWRados::finalize()
     rgw::bucketlogging::shutdown();
   }
 
-  if (use_restore_thread) {
-    restore->stop_processor();
-  }
-  restore = NULL;
   delete index_completion_manager;
 }
 
@@ -5598,6 +5601,17 @@ int RGWRados::restore_obj_from_cloud(RGWLCCloudTierCtx& tier_ctx,
   boost::optional<RGWPutObj_Compress> compressor;
   CompressorRef plugin;
   rgw_placement_rule dest_placement(dest_bucket_info.placement_rule, tier_ctx.restore_storage_class);
+
+  // check if the dest placement is still valid
+  if (!tier_ctx.driver->valid_placement(dest_placement)) {
+    ret = -EINVAL;
+    ldpp_dout(dpp, 0) << "ERROR: non existent restore storage class:"
+	  	      << tier_ctx.restore_storage_class
+		      << ". Restore of object(" << dest_obj << ") , failed, ret="
+		      << ret << dendl;
+    return ret;
+  }
+
   RGWRadosPutObj cb(dpp, cct, plugin, compressor, &processor, progress_cb, progress_data,
                     [&](map<string, bufferlist> obj_attrs) {
                       processor.set_tail_placement(dest_placement);
@@ -8654,6 +8668,7 @@ int RGWRados::olh_init_modification_impl(const DoutPrefixProvider *dpp, const RG
   string attr_name = RGW_ATTR_OLH_PENDING_PREFIX;
   attr_name.append(*op_tag);
 
+  ldpp_dout(dpp, 20) << __func__ << " adding olh pending attr: " << attr_name << dendl;
   op.setxattr(attr_name.c_str(), bl);
 
   int ret = obj_operate(dpp, bucket_info, olh_obj, std::move(op), y);
@@ -9303,7 +9318,7 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
   uint64_t link_epoch = 0;
   cls_rgw_obj_key key;
   bool delete_marker = false;
-  list<cls_rgw_obj_key> remove_instances;
+  set<cls_rgw_obj_key> remove_instances;
   bool need_to_remove = false;
 
   // decode current epoch and instance
@@ -9333,20 +9348,26 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
                      << " key=" << entry.key.name << "[" << entry.key.instance << "] "
                      << (entry.delete_marker ? "(delete)" : "") << dendl;
 
-      if (link_epoch == iter->first)
+      if (link_epoch == entry.epoch)
         ldpp_dout(dpp, 1) << "apply_olh_log epoch collision detected for " << entry.key
                           << "; incoming op: " << entry.op << "(" << entry.op_tag << ")" << dendl;
 
       switch (entry.op) {
       case CLS_RGW_OLH_OP_REMOVE_INSTANCE:
-        remove_instances.push_back(entry.key);
+        remove_instances.insert(entry.key);
         break;
       case CLS_RGW_OLH_OP_LINK_OLH:
         // only overwrite a link of the same epoch if its key sorts before
-        if (link_epoch < iter->first || key.instance.empty() ||
+        // or there is a CLS_RGW_OLH_OP_UNLINK_OLH before this op in this batch
+        if (need_to_remove || link_epoch < entry.epoch || key.instance.empty() ||
             key.instance > entry.key.instance) {
           ldpp_dout(dpp, 20) << "apply_olh_log applying key=" << entry.key << " epoch=" << iter->first << " delete_marker=" << entry.delete_marker
               << " over current=" << key << " epoch=" << link_epoch << " delete_marker=" << delete_marker << dendl;
+
+          if (need_to_remove) {
+            // cancel the instance removal if it's linked again -- e.g. coming from a multisite remote zone
+            remove_instances.erase(entry.key);
+          }
           need_to_link = true;
           need_to_remove = false;
           key = entry.key;
@@ -9359,6 +9380,8 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
       case CLS_RGW_OLH_OP_UNLINK_OLH:
         need_to_remove = true;
         need_to_link = false;
+        break;
+      case CLS_RGW_OLH_OP_STALE:
         break;
       default:
         ldpp_dout(dpp, 0) << "ERROR: apply_olh_log: invalid op: " << (int)entry.op << dendl;
@@ -9389,9 +9412,9 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
   }
 
   /* first remove object instances */
-  for (list<cls_rgw_obj_key>::iterator liter = remove_instances.begin();
+  for (set<cls_rgw_obj_key>::iterator liter = remove_instances.begin();
        liter != remove_instances.end(); ++liter) {
-    cls_rgw_obj_key& key = *liter;
+    const cls_rgw_obj_key& key = *liter;
     rgw_obj obj_instance(bucket, key);
     int ret = delete_obj(dpp, obj_ctx, bucket_info, obj_instance, 0, y,
 			 null_verid, RGW_BILOG_FLAG_VERSIONED_OP,
@@ -9405,7 +9428,9 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
   /* update olh object */
   r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, std::move(op), y);
   if (r < 0) {
-    ldpp_dout(dpp, 0) << "ERROR: " << __func__ << ": could not apply olh update to oid \"" << ref.obj.oid << "\", r=" << r << dendl;
+    if (r != -ECANCELED) {
+      ldpp_dout(dpp, 0) << "ERROR: " << __func__ << ": could not apply olh update to oid \"" << ref.obj.oid << "\", r=" << r << dendl;
+    }
     return r;
   }
 
@@ -11095,6 +11120,7 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
   uint32_t count = 0u;
   std::map<std::string, bufferlist> updates;
   rgw_obj_index_key last_added_entry;
+
   while (count <= num_entries &&
 	 ((shard_id >= 0 && current_shard == uint32_t(shard_id)) ||
 	  current_shard < num_shards)) {
@@ -11103,10 +11129,44 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
 
     librados::ObjectReadOperation op;
     const std::string empty_delimiter;
+
+    // Keep the previous marker to detect real progress
+    const auto prev_marker = marker;
+
     cls_rgw_bucket_list_op(op, marker, prefix, empty_delimiter,
 			   num_entries,
                            list_versions, &result);
     r = rgw_rados_operate(dpp, ioctx, oid, std::move(op), nullptr, y, 0, nullptr, &index_ver.epoch);
+    if (r == RGWBIAdvanceAndRetryError) {
+      // CLS could not return any visible entries in this round,
+      // but it advanced the marker; retry with the new marker.
+
+      // Copy marker from cls type into rgw index key (avoid type-mismatch assignment)
+      marker.name = result.marker.name;
+      marker.instance = result.marker.instance;
+
+      // AdvanceAndRetry expected the marker to advance; no progress observed. Return -EIO.
+      if (prev_marker == marker) {
+        ldpp_dout(dpp, 0)
+          << "ERROR: " << __func__
+          << ": RGW_UNORDERED_LIST_NO_MARKER_PROGRESS_ON_ADVANCE_AND_RETRY"
+          << " oid=" << oid
+          << " prev_marker=" << prev_marker
+          << " marker=" << marker
+          << dendl;
+        return -EIO;
+      }
+
+      ldpp_dout(dpp, 10)
+        << __func__
+        << ": RGWBIAdvanceAndRetryError"
+        << " on oid=" << oid
+        << "; prev_marker=" << prev_marker
+        << " -> marker=" << marker
+        << "; advancing marker and retrying"
+        << dendl;
+      continue;
+    }
     if (r < 0) {
       ldpp_dout(dpp, 0) << "ERROR: " << __func__ <<
 	": error in rgw_rados_operate (bucket list op), r=" << r << dendl;
