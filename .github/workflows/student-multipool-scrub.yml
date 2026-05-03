@@ -21,4 +21,4 @@ jobs:
         run: |
           cd /home/cephuser/ceph
           cd build
-          ../qa/run-standalone.sh scrub/student-multipool-scrub.sh
+          script -q -e -c "../qa/run-standalone.sh scrub/student-multipool-scrub.sh" /dev/null
