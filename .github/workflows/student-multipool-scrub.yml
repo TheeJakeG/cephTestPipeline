@@ -19,7 +19,6 @@ jobs:
 
       - name: Run student scrub standalone test
         run: |
-          cd ~
-          cd ceph
+          cd /home/cephuser/ceph
           cd build
           ../qa/run-standalone.sh scrub/student-multipool-scrub.sh
